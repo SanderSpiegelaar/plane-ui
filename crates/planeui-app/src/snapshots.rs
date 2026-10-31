@@ -139,7 +139,6 @@ pub struct SnapshotsView {
     list_error: Option<SharedString>,
     restore_error: Option<SharedString>,
     listing: Task<()>,
-    restoring: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -172,7 +171,6 @@ impl SnapshotsView {
             list_error: None,
             restore_error: None,
             listing: Task::ready(()),
-            restoring: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.refresh(cx);
@@ -252,25 +250,30 @@ impl SnapshotsView {
             "Restored snapshot from {}",
             display_time(row.taken_at, TimeFormat::DateAndClock)
         );
-        self.restoring = cx.spawn(async move |this, cx| {
+        // The commit must not depend on this view: navigating away drops it, and a confirmed
+        // restore still has to land. The task holds the model and is detached; the view is only
+        // told about a failure if it still exists.
+        let model = self.model.clone();
+        cx.spawn(async move |this, cx| {
             let id = row.id;
             let read = cx
                 .background_spawn(async move { read_restorable(&store, &id) })
                 .await;
-            let applied = this.update(cx, |this, cx| match read {
-                Ok(doc) => this
-                    .model
-                    .update(cx, |model, cx| model.commit(doc, label, cx)),
+            match read {
+                Ok(doc) => model.update(cx, |model, cx| model.commit(doc, label, cx)),
                 Err(error) => {
                     log::error!("could not restore: {error:#}");
-                    this.restore_error = Some(format!("{error:#}").into());
-                    cx.notify();
+                    let shown = this.update(cx, |this, cx| {
+                        this.restore_error = Some(format!("{error:#}").into());
+                        cx.notify();
+                    });
+                    if let Err(error) = shown {
+                        log::debug!("the snapshots screen closed before showing it: {error}");
+                    }
                 }
-            });
-            if let Err(error) = applied {
-                log::debug!("the snapshots screen closed while restoring: {error}");
             }
-        });
+        })
+        .detach();
     }
 }
 
@@ -508,5 +511,19 @@ mod tests {
 
         assert_eq!(fixture.disk(), V3);
         assert_eq!(fixture.aerospace.reload_count(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn a_confirmed_restore_lands_even_if_the_screen_closes(cx: &mut TestAppContext) {
+        let (fixture, model) = with_history(cx);
+        let (window, view) = open_view(cx, &model);
+        let oldest = rows(cx, &view).last().cloned().unwrap();
+
+        view.update(cx, |view, cx| view.restore(oldest, cx));
+        in_window(cx, window, |window, _| window.remove_window());
+        drop(view);
+        cx.run_until_parked();
+
+        assert_eq!(fixture.disk(), V1);
     }
 }
