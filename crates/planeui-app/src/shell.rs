@@ -26,6 +26,7 @@ use crate::gaps_view::GapsView;
 use crate::general_view::{AutoReloadEnabled, GeneralView};
 use crate::keybindings::KeybindingsView;
 use crate::live_data::LiveData;
+use crate::rules_view::RulesView;
 use crate::snapshots::SnapshotsView;
 use crate::workspaces_view::WorkspacesView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
@@ -100,6 +101,7 @@ pub struct Shell {
     general: Entity<GeneralView>,
     keybindings: Entity<KeybindingsView>,
     gaps: Entity<GapsView>,
+    rules: Entity<RulesView>,
     workspaces: Entity<WorkspacesView>,
     /// Built when the Snapshots section opens and dropped when it closes, so the list is read
     /// fresh each time and not at all otherwise.
@@ -124,6 +126,7 @@ impl Shell {
     ) -> Self {
         let aerospace = model.read(cx).aerospace_client();
         let live_data = cx.new(|cx| LiveData::new(aerospace, cx));
+        let rules = cx.new(|cx| RulesView::new(model.clone(), live_data.clone(), window, cx));
         let general = cx.new(|cx| GeneralView::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
         let gaps = cx.new(|cx| GapsView::new(model.clone(), live_data.clone(), window, cx));
@@ -159,6 +162,7 @@ impl Shell {
             general,
             keybindings,
             gaps,
+            rules,
             workspaces,
             snapshots: None,
             prefs_store,
@@ -356,6 +360,7 @@ impl Shell {
             (Section::Gaps, _) => self.gaps.clone().into_any_element(),
             (Section::WorkspacesAndMonitors, _) => self.workspaces.clone().into_any_element(),
             (Section::General, _) => self.general.clone().into_any_element(),
+            (Section::WindowRules, _) => self.rules.clone().into_any_element(),
             (Section::Snapshots, Some(snapshots)) => snapshots.clone().into_any_element(),
             _ => div()
                 .text_color(cx.theme().muted_foreground)

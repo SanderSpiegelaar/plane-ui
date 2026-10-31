@@ -2,6 +2,7 @@
 
 mod binding_draft;
 mod binding_form;
+mod command_form;
 pub mod config_model;
 pub mod fields;
 mod gaps_view;
@@ -9,6 +10,8 @@ mod general_view;
 pub mod keybindings;
 pub mod live_data;
 mod monitor_picker;
+mod rule_form;
+mod rules_view;
 pub mod shell;
 pub mod snapshots;
 pub mod startup;
@@ -50,6 +53,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-z", Redo, None),
         KeyBinding::new("up", PreviousSection, Some(SECTIONS_CONTEXT)),
         KeyBinding::new("down", NextSection, Some(SECTIONS_CONTEXT)),
+        KeyBinding::new(
+            "cmd-alt-up",
+            rules_view::MoveRuleUp,
+            Some(rules_view::RULE_CONTEXT),
+        ),
+        KeyBinding::new(
+            "cmd-alt-down",
+            rules_view::MoveRuleDown,
+            Some(rules_view::RULE_CONTEXT),
+        ),
         KeyBinding::new(
             "enter",
             binding_form::CommitBinding,
