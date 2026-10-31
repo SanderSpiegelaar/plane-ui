@@ -1,0 +1,50 @@
+---
+source: crates/planeui-core/tests/binding_ops.rs
+assertion_line: 81
+expression: report
+---
+## edit commands
+@@ -16,3 +16,3 @@
+ [mode.main.binding]
+-alt-h = 'focus left'
++alt-h = "focus down"
+ alt-l = 'focus right'
+
+## rename chord
+@@ -16,3 +16,3 @@
+ [mode.main.binding]
+-alt-h = 'focus left'
++alt-j = "focus down"
+ alt-l = 'focus right'
+
+## add binding
+@@ -18,2 +18,3 @@
+ alt-l = 'focus right'
++alt-shift-j = "focus down"
+ 
+
+## remove binding
+@@ -16,3 +16,2 @@
+ [mode.main.binding]
+-alt-h = 'focus left'
+ alt-l = 'focus right'
+
+## duplicate to existing bindings
+@@ -22,2 +22,3 @@
+ r = ['flatten-workspace-tree', 'mode main']
++alt-h = 'focus left'
+ 
+
+## duplicate to mode without bindings
+@@ -24 +24,4 @@
+ [mode.empty]
++
++[mode.empty.binding]
++alt-h = 'focus left'
+
+## add to mode without bindings
+@@ -24 +24,4 @@
+ [mode.empty]
++
++[mode.empty.binding]
++alt-j = "focus down"

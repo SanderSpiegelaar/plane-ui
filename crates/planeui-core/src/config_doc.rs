@@ -119,6 +119,89 @@ impl ConfigDoc {
         }
     }
 
+    /// Renames a key without moving its item or changing its surrounding decor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EditError`] if the source is missing or the new key already exists.
+    pub fn rename_key(&mut self, path: &KeyPath, new_name: &str) -> Result<(), EditError> {
+        self.ensure_editable()?;
+        let (leaf, parents) = path.split_last()?;
+        let parent = parents
+            .iter()
+            .try_fold(self.document.as_item_mut(), |item, segment| {
+                item.as_table_like_mut()?.get_mut(segment)
+            })
+            .ok_or_else(|| EditError::NotFound(path.clone()))?;
+        let container = parent
+            .as_table_like_mut()
+            .ok_or_else(|| EditError::NotFound(path.clone()))?;
+        if !container.contains_key(leaf) {
+            return Err(EditError::NotFound(path.clone()));
+        }
+        if leaf == new_name {
+            return Ok(());
+        }
+        if container.contains_key(new_name) {
+            return Err(EditError::AlreadyExists(
+                path.prefix(parents.len()).join(new_name),
+            ));
+        }
+        let entries: Vec<_> = container
+            .iter()
+            .filter_map(|(name, _)| container.get_key_value(name))
+            .map(|(key, item)| {
+                let renamed = if key.get() == leaf {
+                    let mut renamed = Key::new(new_name);
+                    *renamed.leaf_decor_mut() = key.leaf_decor().clone();
+                    *renamed.dotted_decor_mut() = key.dotted_decor().clone();
+                    renamed
+                } else {
+                    key.clone()
+                };
+                (renamed, item.clone())
+            })
+            .collect();
+        container.clear();
+        for (key, item) in entries {
+            match &mut *parent {
+                Item::Table(table) => {
+                    table.insert_formatted(&key, item);
+                }
+                Item::Value(Value::InlineTable(table)) => {
+                    if let Item::Value(value) = item {
+                        table.insert_formatted(&key, value);
+                    }
+                }
+                _ => return Err(EditError::NotATable(path.prefix(parents.len()))),
+            }
+        }
+        Ok(())
+    }
+
+    /// Inserts a new value with its original representation and value decor intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EditError`] when the key exists or its parent cannot hold values.
+    pub fn insert_value_verbatim(&mut self, path: &KeyPath, value: Value) -> Result<(), EditError> {
+        self.ensure_editable()?;
+        if self.get(path).is_some() {
+            return Err(EditError::AlreadyExists(path.clone()));
+        }
+        self.set_value(path, value.clone())?;
+        if let Some(item) = path
+            .segments()
+            .iter()
+            .try_fold(self.document.as_item_mut(), |item, segment| {
+                item.as_table_like_mut()?.get_mut(segment)
+            })
+        {
+            *item = Item::Value(value);
+        }
+        Ok(())
+    }
+
     /// Removes the value or table at `path` with the comment lines directly above it. Comments
     /// separated from it by a blank line stay. Implicit and dotted parent tables left empty are
     /// dropped; `[table]` headers the user wrote are kept.
@@ -405,6 +488,9 @@ pub enum EditError {
     /// Nothing exists at the path.
     #[error("{0} does not exist")]
     NotFound(KeyPath),
+    /// A key already exists at the destination.
+    #[error("{0} already exists")]
+    AlreadyExists(KeyPath),
     /// The path holds something other than an array.
     #[error("{0} is not an array")]
     NotAnArray(KeyPath),

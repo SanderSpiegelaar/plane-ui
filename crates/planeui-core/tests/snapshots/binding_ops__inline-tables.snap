@@ -1,0 +1,49 @@
+---
+source: crates/planeui-core/tests/binding_ops.rs
+assertion_line: 81
+expression: report
+---
+## edit commands
+@@ -6,3 +6,3 @@
+ [mode.main]
+-binding = { alt-h = 'focus left', alt-l = 'focus right' }
++binding = { alt-h = "focus down", alt-l = 'focus right' }
+ 
+
+## rename chord
+@@ -6,3 +6,3 @@
+ [mode.main]
+-binding = { alt-h = 'focus left', alt-l = 'focus right' }
++binding = { alt-j = "focus down", alt-l = 'focus right' }
+ 
+
+## add binding
+@@ -6,3 +6,3 @@
+ [mode.main]
+-binding = { alt-h = 'focus left', alt-l = 'focus right' }
++binding = { alt-h = 'focus left', alt-l = 'focus right', alt-shift-j = "focus down" }
+ 
+
+## remove binding
+@@ -6,3 +6,3 @@
+ [mode.main]
+-binding = { alt-h = 'focus left', alt-l = 'focus right' }
++binding = { alt-l = 'focus right' }
+ 
+
+## duplicate to existing bindings
+@@ -9,3 +9,3 @@
+ [mode.service]
+-binding = { esc = 'mode main' }
++binding = { esc = 'mode main', alt-h = 'focus left'}
+ 
+
+## duplicate to mode without bindings
+@@ -12 +12,2 @@
+ [mode.empty]
++binding = { alt-h = 'focus left'}
+
+## add to mode without bindings
+@@ -12 +12,2 @@
+ [mode.empty]
++binding = { alt-j = "focus down" }

@@ -1,0 +1,46 @@
+---
+source: crates/planeui-core/tests/binding_ops.rs
+assertion_line: 81
+expression: report
+---
+## edit commands
+@@ -9,3 +9,3 @@
+ focus-follows-mouse.enabled = true
+-mode.main.binding.alt-h = 'focus left'
++mode.main.binding.alt-h = "focus down"
+ mode.main.binding.alt-l = 'focus right'
+
+## rename chord
+@@ -9,3 +9,3 @@
+ focus-follows-mouse.enabled = true
+-mode.main.binding.alt-h = 'focus left'
++mode.main.binding.alt-j = "focus down"
+ mode.main.binding.alt-l = 'focus right'
+
+## add binding
+@@ -11,2 +11,3 @@
+ mode.main.binding.alt-l = 'focus right'
++mode.main.binding.alt-shift-j = "focus down"
+ mode.service.binding.esc = ['reload-config', 'mode main']
+
+## remove binding
+@@ -9,3 +9,2 @@
+ focus-follows-mouse.enabled = true
+-mode.main.binding.alt-h = 'focus left'
+ mode.main.binding.alt-l = 'focus right'
+
+## duplicate to existing bindings
+@@ -12,2 +12,3 @@
+ mode.service.binding.esc = ['reload-config', 'mode main']
++mode.service.binding.alt-h = 'focus left'
+ mode.empty.test = true
+
+## duplicate to mode without bindings
+@@ -13 +13,2 @@
+ mode.empty.test = true
++mode.empty.binding.alt-h = 'focus left'
+
+## add to mode without bindings
+@@ -13 +13,2 @@
+ mode.empty.test = true
++mode.empty.binding.alt-j = "focus down"
