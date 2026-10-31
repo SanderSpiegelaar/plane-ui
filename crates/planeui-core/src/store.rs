@@ -61,6 +61,28 @@ fn non_empty_path(value: Option<OsString>) -> Option<PathBuf> {
     value.filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
+/// AeroSpace's default config, vendored byte-for-byte, for creating a config where none
+/// exists.
+pub const DEFAULT_CONFIG: &str = include_str!("../tests/fixtures/aerospace-default.toml");
+
+/// Writes [`DEFAULT_CONFIG`] to `path` atomically, creating its directory. A file that appeared
+/// at `path` since it was found missing is left alone, so the caller can simply open it.
+///
+/// # Errors
+///
+/// `path` cannot be inspected, or the write fails.
+pub fn create_default_config(path: &Path) -> Result<(), WriteError> {
+    let exists = path.try_exists().map_err(|source| WriteError::Resolve {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !exists {
+        ConfigStore::new(&ResolvedConfig::new_file(path.to_path_buf()))
+            .write_atomic(DEFAULT_CONFIG.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// The config file PlaneUI edits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedConfig {

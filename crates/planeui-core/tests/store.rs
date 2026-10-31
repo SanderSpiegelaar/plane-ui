@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use planeui_core::store::{
-    CheckError, ConfigStore, DiskStamp, LoadError, LocateError, PathEnv, ResolvedConfig,
-    SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore, WriteError,
-    resolve_config_path,
+    CheckError, ConfigStore, DEFAULT_CONFIG, DiskStamp, LoadError, LocateError, PathEnv,
+    ResolvedConfig, SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore,
+    WriteError, create_default_config, resolve_config_path,
 };
 use tempfile::TempDir;
 
@@ -650,4 +650,39 @@ fn a_snapshot_directory_that_cannot_be_created_fails() {
         matches!(error, SnapshotError::CreateDir { .. }),
         "{error:?}"
     );
+}
+
+#[test]
+fn creates_the_default_config_byte_for_byte_where_none_exists() {
+    let (_dir, root) = temp_root().unwrap();
+    let env = env_without_xdg(&root);
+    let suggested = env.xdg_config_path();
+    assert!(matches!(
+        resolve_config_path(&env, None),
+        Err(LocateError::NotFound { suggested: path }) if path == suggested
+    ));
+
+    create_default_config(&suggested).unwrap();
+
+    let fixture = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/aerospace-default.toml"),
+    )
+    .unwrap();
+    assert_eq!(fs::read(&suggested).unwrap(), fixture);
+    assert_eq!(DEFAULT_CONFIG.as_bytes(), fixture);
+    assert_eq!(
+        resolve_config_path(&env, None).unwrap().display_path,
+        suggested
+    );
+}
+
+#[test]
+fn creating_the_default_config_keeps_a_file_that_appeared_meanwhile() {
+    let (_dir, root) = temp_root().unwrap();
+    let path = root.join("aerospace.toml");
+    write(&path, "# mine\n").unwrap();
+
+    create_default_config(&path).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# mine\n");
 }

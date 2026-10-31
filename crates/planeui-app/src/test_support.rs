@@ -2,7 +2,7 @@
 //! AeroSpace, so tests never touch the real home directory or the real `aerospace`.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::{
@@ -12,10 +12,11 @@ use gpui_kit::{
 use planeui_core::aerospace::FakeAerospace;
 use planeui_core::apply::ApplyContext;
 use planeui_core::config_doc::KeyPath;
-use planeui_core::store::{ConfigStore, ResolvedConfig, SnapshotStore};
+use planeui_core::store::{ConfigStore, PathEnv, ResolvedConfig, SnapshotStore};
 use tempfile::TempDir;
 
 use crate::config_model::ConfigModel;
+use crate::startup::{Session, open_session};
 
 pub struct Fixture {
     _directory: TempDir,
@@ -83,6 +84,49 @@ impl Fixture {
     pub fn unblock_snapshots(&self) {
         fs::remove_file(&self.snapshot_dir).unwrap();
     }
+}
+
+/// A temporary home directory and data directory for the startup flow, with a fake AeroSpace.
+pub struct StartupFixture {
+    _directory: TempDir,
+    pub env: PathEnv,
+    pub snapshot_dir: PathBuf,
+    pub aerospace: Arc<FakeAerospace>,
+}
+
+impl StartupFixture {
+    pub fn new(aerospace: FakeAerospace) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        // Resolved, so paths built from it match the canonical paths startup reports.
+        let root = directory.path().canonicalize().unwrap();
+        Self {
+            env: PathEnv {
+                home: root.join("home"),
+                xdg_config_home: None,
+            },
+            snapshot_dir: root.join("PlaneUI/snapshots"),
+            aerospace: Arc::new(aerospace),
+            _directory: directory,
+        }
+    }
+
+    pub fn loader(&self) -> impl Fn() -> anyhow::Result<Session> + Send + Sync + 'static {
+        let env = self.env.clone();
+        let aerospace = self.aerospace.clone();
+        let snapshot_dir = self.snapshot_dir.clone();
+        move || {
+            open_session(
+                &env,
+                aerospace.clone(),
+                SnapshotStore::new(snapshot_dir.clone()),
+            )
+        }
+    }
+}
+
+pub fn write_file(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
 }
 
 pub fn set_padding(model: &Entity<ConfigModel>, padding: i64, cx: &mut TestAppContext) {
