@@ -15,20 +15,22 @@ pub struct ConfigDoc {
 }
 
 /// `toml_edit` always renders `\n`, so the source's line ending is restored on output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LineEnding {
     Lf,
     Crlf,
+    /// `toml_edit` forgets which lines had `\r`, so a mixed file cannot be edited without
+    /// rewriting untouched lines. It renders its source verbatim and refuses edits.
+    Mixed(String),
 }
 
 impl LineEnding {
-    /// Only a file that uses CRLF throughout counts as CRLF; a mixed file renders as LF.
     fn detect(source: &str) -> Self {
         let line_feeds = source.matches('\n').count();
-        if line_feeds > 0 && source.matches("\r\n").count() == line_feeds {
-            Self::Crlf
-        } else {
-            Self::Lf
+        match source.matches("\r\n").count() {
+            0 => Self::Lf,
+            crlf if crlf == line_feeds => Self::Crlf,
+            _ => Self::Mixed(source.to_owned()),
         }
     }
 }
@@ -73,6 +75,7 @@ impl ConfigDoc {
     ///
     /// Returns [`EditError`] when a parent is not a table or `path` names a table.
     pub fn set_value(&mut self, path: &KeyPath, mut value: Value) -> Result<(), EditError> {
+        self.ensure_editable()?;
         let (leaf, parents) = path.split_last()?;
         let mut indent = indentation(self.document.as_table());
         let mut container = self.document.as_item_mut();
@@ -124,6 +127,7 @@ impl ConfigDoc {
     ///
     /// Returns [`EditError::NotFound`] when nothing is at `path`.
     pub fn remove(&mut self, path: &KeyPath) -> Result<(), EditError> {
+        self.ensure_editable()?;
         let (_, parents) = path.split_last()?;
         let visible_depth = visible_table_depth(self.document.as_table(), parents);
         let visible_path = parents.get(..visible_depth).unwrap_or_default();
@@ -167,10 +171,16 @@ impl ConfigDoc {
             ArrayMut::Tables(tables) => {
                 check_index(path, index, tables.len(), true)?;
                 let mut table = into_section(path, value)?;
-                let neighbour = tables
-                    .get(index)
-                    .or_else(|| index.checked_sub(1).and_then(|last| tables.get(last)));
-                table.set_position(neighbour.and_then(Table::position));
+                // Before element `index`: take its header's position. Appending: take the last
+                // position the previous element's group uses, so its sub-tables stay with it.
+                let position = match tables.get(index) {
+                    Some(next) => next.position(),
+                    None => index
+                        .checked_sub(1)
+                        .and_then(|last| tables.get(last))
+                        .and_then(|previous| section_positions(previous).into_iter().max()),
+                };
+                table.set_position(position);
                 tables.insert(index, table);
             }
         }
@@ -183,6 +193,7 @@ impl ConfigDoc {
     ///
     /// Returns [`EditError`] when `path` is not an array or `index` is out of bounds.
     pub fn array_remove(&mut self, path: &KeyPath, index: usize) -> Result<(), EditError> {
+        self.ensure_editable()?;
         match self.array_mut(path)? {
             ArrayMut::Inline(array) => {
                 check_index(path, index, array.len(), false)?;
@@ -208,6 +219,7 @@ impl ConfigDoc {
     ///
     /// Returns [`EditError`] when `path` is not an array or an index is out of bounds.
     pub fn array_move(&mut self, path: &KeyPath, from: usize, to: usize) -> Result<(), EditError> {
+        self.ensure_editable()?;
         match self.array_mut(path)? {
             ArrayMut::Inline(array) => {
                 check_index(path, from, array.len(), false)?;
@@ -224,11 +236,15 @@ impl ConfigDoc {
             ArrayMut::Tables(tables) => {
                 check_index(path, from, tables.len(), false)?;
                 check_index(path, to, tables.len(), false)?;
-                let positions: Vec<Option<isize>> = tables.iter().map(Table::position).collect();
+                // Each element owns its header and its `[array.sub]` tables; hand the same
+                // positions out again in the new order so sub-tables move with their element.
+                let mut positions: Vec<isize> = tables.iter().flat_map(section_positions).collect();
+                positions.sort_unstable();
                 let moved = tables.remove(from);
                 tables.insert(to, moved);
-                for (table, position) in tables.iter_mut().zip(positions) {
-                    table.set_position(position);
+                let mut positions = positions.into_iter();
+                for table in tables.iter_mut() {
+                    reassign_positions(table, &mut positions);
                 }
             }
         }
@@ -279,7 +295,15 @@ impl ConfigDoc {
         Ok(())
     }
 
+    fn ensure_editable(&self) -> Result<(), EditError> {
+        match self.line_ending {
+            LineEnding::Mixed(_) => Err(EditError::MixedLineEndings),
+            LineEnding::Lf | LineEnding::Crlf => Ok(()),
+        }
+    }
+
     fn array_mut(&mut self, path: &KeyPath) -> Result<ArrayMut<'_>, EditError> {
+        self.ensure_editable()?;
         let item = path
             .segments()
             .iter()
@@ -359,6 +383,9 @@ pub enum EditError {
     /// The path has no segments.
     #[error("the key path is empty")]
     EmptyPath,
+    /// The file mixes CRLF and LF line endings, which an edit cannot preserve.
+    #[error("the file mixes CRLF and LF line endings; PlaneUI edits it once they are consistent")]
+    MixedLineEndings,
     /// A parent on the path holds a value, not a table.
     #[error("{0} is not a table")]
     NotATable(KeyPath),
@@ -402,6 +429,42 @@ fn check_index(path: &KeyPath, index: usize, len: usize, appending: bool) -> Res
             index,
             len,
         })
+    }
+}
+
+/// Positions of `table`'s header and every header nested under it, in render-visit order.
+fn section_positions(table: &Table) -> Vec<isize> {
+    let mut positions: Vec<isize> = table.position().into_iter().collect();
+    for (_, item) in table {
+        match item {
+            Item::Table(child) => positions.extend(section_positions(child)),
+            Item::ArrayOfTables(children) => {
+                positions.extend(children.iter().flat_map(section_positions));
+            }
+            _ => {}
+        }
+    }
+    positions
+}
+
+/// Gives `table` and its nested headers the next positions, in the order
+/// [`section_positions`] reads them.
+fn reassign_positions(table: &mut Table, positions: &mut impl Iterator<Item = isize>) {
+    if table.position().is_some()
+        && let Some(position) = positions.next()
+    {
+        table.set_position(Some(position));
+    }
+    for (_, item) in table.iter_mut() {
+        match item {
+            Item::Table(child) => reassign_positions(child, positions),
+            Item::ArrayOfTables(children) => {
+                for child in children.iter_mut() {
+                    reassign_positions(child, positions);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -811,9 +874,10 @@ fn prune_empty_tables(root: &mut Table, parents: &[String]) {
 
 impl fmt::Display for ConfigDoc {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.line_ending {
+        match &self.line_ending {
             LineEnding::Lf => self.document.fmt(formatter),
             LineEnding::Crlf => formatter.write_str(&to_crlf(&self.document.to_string())),
+            LineEnding::Mixed(source) => formatter.write_str(source),
         }
     }
 }
@@ -1083,6 +1147,36 @@ mod tests {
         for (source, edit, expected) in cases {
             assert_eq!(edited(source, |document| edit(document, &path)), expected);
         }
+    }
+
+    #[test]
+    fn moving_and_appending_rules_keeps_their_sub_tables() {
+        let source =
+            "[[r]]\nrun = 'a'\n[r.if]\napp-id = 'a'\n\n[[r]]\nrun = 'b'\n[r.if]\napp-id = 'b'\n";
+        let path = KeyPath::from(["r"]);
+        let moved = edited(source, |document| document.array_move(&path, 0, 1));
+        assert_eq!(
+            moved,
+            "\n[[r]]\nrun = 'b'\n[r.if]\napp-id = 'b'\n[[r]]\nrun = 'a'\n[r.if]\napp-id = 'a'\n"
+        );
+        let mut rule = InlineTable::new();
+        rule.insert("run", Value::from("c"));
+        let appended = edited(source, |document| {
+            document.array_insert(&path, 2, Value::InlineTable(rule))
+        });
+        assert_eq!(appended, format!("{source}\n[[r]]\nrun = \"c\"\n"));
+    }
+
+    #[test]
+    fn mixed_line_endings_round_trip_but_refuse_edits() {
+        let source = "a = 1\r\nb = 2\n";
+        let mut document = ConfigDoc::parse(source).unwrap();
+        assert_eq!(document.to_string(), source);
+        let error = document
+            .set_value(&KeyPath::from(["b"]), int(3))
+            .unwrap_err();
+        assert_eq!(error, EditError::MixedLineEndings);
+        assert_eq!(document.to_string(), source);
     }
 
     #[test]
