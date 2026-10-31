@@ -24,9 +24,11 @@ pub struct GapsView {
 }
 
 pub(crate) fn unsigned_number(value: i64) -> Result<(), SharedString> {
-    u32::try_from(value)
-        .map(|_| ())
-        .map_err(|_| "Must be between 0 and 4294967295".into())
+    match u32::try_from(value) {
+        Ok(_) => Ok(()),
+        Err(_) if value < 0 => Err("Must be 0 or more".into()),
+        Err(_) => Err("Too large".into()),
+    }
 }
 
 fn effective(value: &GapValue) -> i64 {

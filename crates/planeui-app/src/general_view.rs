@@ -184,14 +184,30 @@ impl GeneralView {
             let names = inferred_persistent_workspaces(view.read(cx).model.read(cx).view());
             let checkbox_view = view.clone();
             let confirm_view = view.downgrade();
-            alert.confirm().title("Upgrade to config-version 2?")
-                .description("Version 2 uses explicit persistent-workspaces instead of inferring them from bindings and monitor assignments.")
-                .child(Checkbox::new("prefill-workspaces").label("Prefill persistent-workspaces").checked(view.read(cx).prefill).on_click(move |checked, _, cx| {
-                    checkbox_view.update(cx, |this, cx| { this.prefill = *checked; cx.notify(); });
-                }))
+            alert
+                .confirm()
+                .title("Upgrade to config-version 2?")
+                .description(
+                    "Version 2 uses explicit persistent-workspaces instead of inferring them \
+                     from bindings and monitor assignments.",
+                )
+                .child(
+                    Checkbox::new("prefill-workspaces")
+                        .label("Prefill persistent-workspaces")
+                        .checked(view.read(cx).prefill)
+                        .on_click(move |checked, _, cx| {
+                            checkbox_view.update(cx, |this, cx| {
+                                this.prefill = *checked;
+                                cx.notify();
+                            });
+                        }),
+                )
                 .when(!names.is_empty(), |alert| alert.child(names.join(", ")))
-                .ok_text("Upgrade to 2").on_ok(move |_, _, cx| {
-                    if let Err(error) = confirm_view.update(cx, Self::upgrade) { log::debug!("General closed before upgrading: {error}"); }
+                .ok_text("Upgrade to 2")
+                .on_ok(move |_, _, cx| {
+                    if let Err(error) = confirm_view.update(cx, Self::upgrade) {
+                        log::debug!("General closed before upgrading: {error}");
+                    }
                     true
                 })
         });
