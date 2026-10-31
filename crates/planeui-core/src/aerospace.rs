@@ -13,6 +13,19 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 use std::{env, fmt, thread};
 
+use crate::commands::WorkspaceName;
+
+/// A running application available to rule pickers.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct App {
+    /// macOS bundle identifier.
+    #[serde(rename = "app-bundle-id")]
+    pub bundle_id: String,
+    /// Application display name.
+    #[serde(rename = "app-name")]
+    pub name: String,
+}
+
 /// A connected monitor in AeroSpace's left-to-right sequence order.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Monitor {
@@ -31,6 +44,24 @@ pub struct Monitor {
 ///
 /// Calls block until the CLI answers or times out, so the app runs them off the UI thread.
 pub trait Aerospace: Send + Sync + fmt::Debug {
+    /// Running applications from `list-apps --json`, ignoring unknown JSON fields.
+    ///
+    /// # Errors
+    /// Returns a CLI error, including [`CliError::NotRunning`] when the server is unavailable.
+    fn list_apps(&self) -> Result<Vec<App>, CliError>;
+
+    /// Connected monitors including the main flag, requested explicitly through `--format`.
+    ///
+    /// # Errors
+    /// Returns a CLI error, including [`CliError::NotRunning`] when the server is unavailable.
+    fn list_monitors(&self) -> Result<Vec<Monitor>, CliError>;
+
+    /// Known workspaces from `list-workspaces --all --json` in server order.
+    ///
+    /// # Errors
+    /// Returns a CLI error for an unavailable server, malformed JSON, or invalid workspace name.
+    fn list_workspaces(&self) -> Result<Vec<WorkspaceName>, CliError>;
+
     /// The installed version, from `aerospace --version`.
     ///
     /// # Errors
@@ -155,6 +186,9 @@ impl fmt::Display for AerospaceVersion {
 /// Why a call to the AeroSpace CLI produced no answer.
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
+    /// The CLI is installed, but its server cannot be reached.
+    #[error("AeroSpace is not running")]
+    NotRunning,
     /// No `aerospace` binary on `PATH`, in `/opt/homebrew/bin`, or in `/usr/local/bin`.
     #[error("the aerospace command was not found; is AeroSpace installed?")]
     BinaryNotFound,
@@ -284,9 +318,49 @@ impl CliAerospace {
             stderr: receive(&stderr)?,
         })
     }
+
+    fn list<T: serde::de::DeserializeOwned>(&self, args: &[&str]) -> Result<Vec<T>, CliError> {
+        let output = self.run(args)?;
+        if output.server_not_running() {
+            return Err(CliError::NotRunning);
+        }
+        if !output.status.success() {
+            return Err(output.unexpected());
+        }
+        serde_json::from_str(&output.stdout).map_err(|_| output.unexpected())
+    }
 }
 
 impl Aerospace for CliAerospace {
+    fn list_apps(&self) -> Result<Vec<App>, CliError> {
+        self.list(&["list-apps", "--json"])
+    }
+
+    fn list_monitors(&self) -> Result<Vec<Monitor>, CliError> {
+        self.list(&[
+            "list-monitors",
+            "--json",
+            "--format",
+            "%{monitor-id}%{monitor-name}%{monitor-is-main}",
+        ])
+    }
+
+    fn list_workspaces(&self) -> Result<Vec<WorkspaceName>, CliError> {
+        #[derive(serde::Deserialize)]
+        struct WorkspaceJson {
+            workspace: String,
+        }
+        self.list::<WorkspaceJson>(&["list-workspaces", "--all", "--json"])?
+            .into_iter()
+            .map(|row| {
+                WorkspaceName::new(row.workspace).map_err(|error| CliError::UnexpectedOutput {
+                    command: "list-workspaces --all --json".into(),
+                    detail: error.to_string(),
+                })
+            })
+            .collect()
+    }
+
     fn version(&self) -> Result<AerospaceVersion, CliError> {
         let output = self.run(&["--version"])?;
         // The client line is there even when the server is down; the server line then is not.
@@ -455,6 +529,11 @@ pub struct FakeAerospace {
 #[derive(Debug)]
 struct FakeState {
     installed: bool,
+    running: bool,
+    apps: Vec<App>,
+    monitors: Vec<Monitor>,
+    workspaces: Vec<WorkspaceName>,
+    list_count: usize,
     version: AerospaceVersion,
     config_path: Option<PathBuf>,
     reloads: VecDeque<Result<ReloadOutcome, CliError>>,
@@ -469,6 +548,11 @@ impl FakeAerospace {
         Self {
             state: Mutex::new(FakeState {
                 installed: true,
+                running: true,
+                apps: Vec::new(),
+                monitors: Vec::new(),
+                workspaces: Vec::new(),
+                list_count: 0,
                 version: AerospaceVersion {
                     major: 0,
                     minor: 21,
@@ -495,6 +579,51 @@ impl FakeAerospace {
     pub fn with_version(self, version: AerospaceVersion) -> Self {
         self.state().version = version;
         self
+    }
+
+    /// Sets whether the fake server can answer live-data calls.
+    #[must_use]
+    pub fn with_running(self, running: bool) -> Self {
+        self.state().running = running;
+        self
+    }
+
+    /// Answers `list_apps` with the supplied applications.
+    #[must_use]
+    pub fn with_apps(self, apps: Vec<App>) -> Self {
+        self.state().apps = apps;
+        self
+    }
+
+    /// Answers `list_monitors` with the supplied connected displays.
+    #[must_use]
+    pub fn with_monitors(self, monitors: Vec<Monitor>) -> Self {
+        self.state().monitors = monitors;
+        self
+    }
+
+    /// Answers `list_workspaces` with the supplied workspace names.
+    #[must_use]
+    pub fn with_workspaces(self, workspaces: Vec<WorkspaceName>) -> Self {
+        self.state().workspaces = workspaces;
+        self
+    }
+
+    /// Number of live-data list calls, including failures.
+    pub fn list_count(&self) -> usize {
+        self.state().list_count
+    }
+
+    fn list<T>(&self, read: impl FnOnce(&FakeState) -> Vec<T>) -> Result<Vec<T>, CliError> {
+        let mut state = self.state();
+        state.list_count += 1;
+        if !state.installed {
+            return Err(CliError::BinaryNotFound);
+        }
+        if !state.running {
+            return Err(CliError::NotRunning);
+        }
+        Ok(read(&state))
     }
 
     /// Answers `config_path` with `path`, as a running server would.
@@ -528,6 +657,18 @@ impl Default for FakeAerospace {
 
 #[cfg(any(test, feature = "test-support"))]
 impl Aerospace for FakeAerospace {
+    fn list_apps(&self) -> Result<Vec<App>, CliError> {
+        self.list(|state| state.apps.clone())
+    }
+
+    fn list_monitors(&self) -> Result<Vec<Monitor>, CliError> {
+        self.list(|state| state.monitors.clone())
+    }
+
+    fn list_workspaces(&self) -> Result<Vec<WorkspaceName>, CliError> {
+        self.list(|state| state.workspaces.clone())
+    }
+
     fn version(&self) -> Result<AerospaceVersion, CliError> {
         let state = self.state();
         if !state.installed {
@@ -541,7 +682,7 @@ impl Aerospace for FakeAerospace {
         if !state.installed {
             return Err(CliError::BinaryNotFound);
         }
-        Ok(state.config_path.clone())
+        Ok(state.running.then(|| state.config_path.clone()).flatten())
     }
 
     fn reload_config(&self) -> Result<ReloadOutcome, CliError> {
@@ -550,10 +691,13 @@ impl Aerospace for FakeAerospace {
         if !state.installed {
             return Err(CliError::BinaryNotFound);
         }
-        state
-            .reloads
-            .pop_front()
-            .unwrap_or(Ok(ReloadOutcome::Applied))
+        state.reloads.pop_front().unwrap_or_else(|| {
+            Ok(if state.running {
+                ReloadOutcome::Applied
+            } else {
+                ReloadOutcome::NotRunning
+            })
+        })
     }
 }
 
@@ -659,5 +803,38 @@ mod tests {
             move || fake.reload_config()
         });
         assert_eq!(worker.join().unwrap().unwrap(), ReloadOutcome::Applied);
+    }
+
+    #[test]
+    fn fake_live_data_is_configurable_and_reports_unavailable_servers() {
+        let apps: Vec<App> =
+            serde_json::from_str(include_str!("../tests/fixtures/cli/list-apps/stdout")).unwrap();
+        let monitors: Vec<Monitor> =
+            serde_json::from_str(include_str!("../tests/fixtures/cli/list-monitors/stdout"))
+                .unwrap();
+        let workspaces = vec![WorkspaceName::new("A").unwrap()];
+        let fake = FakeAerospace::new()
+            .with_apps(apps.clone())
+            .with_monitors(monitors.clone())
+            .with_workspaces(workspaces.clone());
+        assert_eq!(fake.list_apps().unwrap(), apps);
+        assert_eq!(fake.list_monitors().unwrap(), monitors);
+        assert_eq!(fake.list_workspaces().unwrap(), workspaces);
+        assert_eq!(fake.list_count(), 3);
+        let fake = fake.with_running(false);
+        assert!(matches!(fake.list_apps(), Err(CliError::NotRunning)));
+        assert!(matches!(fake.list_monitors(), Err(CliError::NotRunning)));
+        assert!(matches!(fake.list_workspaces(), Err(CliError::NotRunning)));
+        assert_eq!(fake.reload_config().unwrap(), ReloadOutcome::NotRunning);
+        let fake = FakeAerospace::missing();
+        assert!(matches!(fake.list_apps(), Err(CliError::BinaryNotFound)));
+        assert!(matches!(
+            fake.list_monitors(),
+            Err(CliError::BinaryNotFound)
+        ));
+        assert!(matches!(
+            fake.list_workspaces(),
+            Err(CliError::BinaryNotFound)
+        ));
     }
 }

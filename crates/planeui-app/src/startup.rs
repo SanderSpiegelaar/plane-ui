@@ -112,6 +112,18 @@ pub fn open_session(
 struct MissingAerospace;
 
 impl Aerospace for MissingAerospace {
+    fn list_apps(&self) -> Result<Vec<planeui_core::aerospace::App>, CliError> {
+        Err(CliError::BinaryNotFound)
+    }
+
+    fn list_monitors(&self) -> Result<Vec<planeui_core::aerospace::Monitor>, CliError> {
+        Err(CliError::BinaryNotFound)
+    }
+
+    fn list_workspaces(&self) -> Result<Vec<planeui_core::commands::WorkspaceName>, CliError> {
+        Err(CliError::BinaryNotFound)
+    }
+
     fn version(&self) -> Result<AerospaceVersion, CliError> {
         Err(CliError::BinaryNotFound)
     }

@@ -41,6 +41,20 @@ static FAKE_BINARIES: LazyLock<TempDir> = LazyLock::new(|| {
     }
     write_script(&binaries.path().join("hangs"), "sleep 5\n");
     write_script(
+        &binaries.path().join("lists-extra-fields"),
+        r#"case "$1" in
+list-apps) echo '[{"app-bundle-id":"com.apple.finder","app-name":"Finder","future":{"nested":true}}]' ;;
+list-monitors) echo '[{"monitor-id":1,"monitor-name":"Built-in","monitor-is-main":true,"future":123}]' ;;
+list-workspaces) echo '[{"workspace":"A","future":[1,2]}]' ;;
+esac
+"#,
+    );
+    write_script(
+        &binaries.path().join("lists-malformed"),
+        "echo 'not json'\n",
+    );
+    write_script(&binaries.path().join("lists-failed"), "echo '[]'\nexit 1\n");
+    write_script(
         &binaries.path().join("floods-stderr"),
         &format!(
             "head -c 1000000 /dev/zero | tr '\\0' x >&2\ncat '{}'\n",
@@ -228,4 +242,101 @@ fn output_larger_than_a_pipe_buffer_does_not_block() {
     let version = replaying("floods-stderr").version().unwrap();
 
     assert_eq!(version.to_string(), "0.21.3-Beta");
+}
+
+#[test]
+fn recorded_apps_use_bundle_identifiers_and_names() {
+    let apps = replaying("list-apps").list_apps().unwrap();
+    assert!(
+        apps.iter()
+            .any(|app| app.bundle_id == "com.apple.finder" && app.name == "Finder")
+    );
+    assert!(apps.iter().all(|app| !app.name.is_empty()));
+    assert_eq!(args_passed_to("list-apps"), "list-apps --json\n");
+}
+
+#[test]
+fn recorded_monitors_include_the_main_flag() {
+    let monitors = replaying("list-monitors").list_monitors().unwrap();
+    assert_eq!(
+        monitors
+            .iter()
+            .map(|monitor| (monitor.id, monitor.name.as_str(), monitor.is_main))
+            .collect::<Vec<_>>(),
+        [
+            (1, "LG ULTRAGEAR+ (1)", false),
+            (2, "Built-in Retina Display", true),
+            (3, "LG ULTRAGEAR+ (2)", false),
+        ]
+    );
+    assert_eq!(
+        args_passed_to("list-monitors"),
+        "list-monitors --json --format %{monitor-id}%{monitor-name}%{monitor-is-main}\n"
+    );
+}
+
+#[test]
+fn recorded_workspaces_are_typed_and_keep_server_order() {
+    let workspaces = replaying("list-workspaces").list_workspaces().unwrap();
+    assert_eq!(
+        workspaces
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        (1..=11)
+            .map(|number| number.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        args_passed_to("list-workspaces"),
+        "list-workspaces --all --json\n"
+    );
+}
+
+#[test]
+fn live_data_ignores_extra_json_fields() {
+    let aerospace = replaying("lists-extra-fields");
+    assert_eq!(
+        aerospace.list_apps().unwrap().first().unwrap().bundle_id,
+        "com.apple.finder"
+    );
+    assert!(aerospace.list_monitors().unwrap().first().unwrap().is_main);
+    assert_eq!(
+        aerospace
+            .list_workspaces()
+            .unwrap()
+            .first()
+            .unwrap()
+            .as_str(),
+        "A"
+    );
+}
+
+#[test]
+fn live_data_reports_not_running_and_malformed_or_failed_output() {
+    let aerospace = replaying("reload-not-running-synthesized");
+    assert!(matches!(aerospace.list_apps(), Err(CliError::NotRunning)));
+    assert!(matches!(
+        aerospace.list_monitors(),
+        Err(CliError::NotRunning)
+    ));
+    assert!(matches!(
+        aerospace.list_workspaces(),
+        Err(CliError::NotRunning)
+    ));
+    for case in ["lists-malformed", "lists-failed"] {
+        let aerospace = replaying(case);
+        assert!(matches!(
+            aerospace.list_apps(),
+            Err(CliError::UnexpectedOutput { .. })
+        ));
+        assert!(matches!(
+            aerospace.list_monitors(),
+            Err(CliError::UnexpectedOutput { .. })
+        ));
+        assert!(matches!(
+            aerospace.list_workspaces(),
+            Err(CliError::UnexpectedOutput { .. })
+        ));
+    }
 }
