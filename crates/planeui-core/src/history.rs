@@ -1,9 +1,16 @@
 //! Exact, unlimited in-session undo and redo. Configs are small, so each entry stores whole
 //! documents instead of inverse edits; undoing is then a plain write of the stored text.
 
+/// Identifies one recorded change. Texts can repeat (1 → 2 → 1), so positions in history are
+/// tracked by id, never by content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntryId(u64);
+
 /// One committed change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
+    /// Unique within one [`History`].
+    pub id: EntryId,
     /// Document text before the change.
     pub before: String,
     /// Document text after the change.
@@ -31,6 +38,7 @@ pub struct HistoryStep {
 pub struct History {
     undo: Vec<Entry>,
     redo: Vec<Entry>,
+    next_id: u64,
 }
 
 impl History {
@@ -43,7 +51,10 @@ impl History {
     /// Records a committed change. A new change clears the redo stack.
     pub fn record(&mut self, before: String, after: String, label: impl Into<String>) {
         self.redo.clear();
+        let id = EntryId(self.next_id);
+        self.next_id += 1;
         self.undo.push(Entry {
+            id,
             before,
             after,
             label: label.into(),
@@ -83,14 +94,21 @@ impl History {
         }
     }
 
-    /// Drops changes that never reached the disk, so undo cannot resurrect them. Afterwards the
-    /// latest undo entry ends at `text` (or the stack is empty). A discarded undo is taken back
-    /// by replaying redo entries; discarded commits are popped.
-    pub fn rewind_to(&mut self, text: &str) {
-        if self.undo.last().is_some_and(|entry| entry.after == text) {
+    /// The latest change the current document includes, or `None` before any change. A write
+    /// carries the head it represents, so the caller knows which history state reached disk.
+    #[must_use]
+    pub fn head(&self) -> Option<EntryId> {
+        self.undo.last().map(|entry| entry.id)
+    }
+
+    /// Moves history back to `head`, the last state that reached the disk, so undo cannot
+    /// resurrect changes that were discarded before being written. A discarded undo is taken
+    /// back by replaying redo entries; discarded commits are dropped.
+    pub fn rewind_to(&mut self, head: Option<EntryId>) {
+        if self.head() == head {
             return;
         }
-        if let Some(index) = self.redo.iter().rposition(|entry| entry.after == text) {
+        if let Some(index) = self.redo.iter().position(|entry| Some(entry.id) == head) {
             while self.redo.len() > index {
                 if let Some(entry) = self.redo.pop() {
                     self.undo.push(entry);
@@ -98,7 +116,7 @@ impl History {
             }
             return;
         }
-        while self.undo.last().is_some_and(|entry| entry.after != text) {
+        while self.head().is_some() && self.head() != head {
             self.undo.pop();
         }
     }
@@ -143,14 +161,15 @@ mod tests {
     }
 
     #[test]
-    fn rewind_drops_commits_that_never_reached_the_disk() {
+    fn rewind_drops_commits_that_never_reached_the_disk_even_with_repeated_text() {
         let mut history = History::new();
-        history.record("30".into(), "10".into(), "written");
-        history.record("10".into(), "1".into(), "discarded 1");
+        history.record("30".into(), "1".into(), "written");
+        let on_disk = history.head();
         history.record("1".into(), "2".into(), "discarded 2");
-        history.rewind_to("10");
+        history.record("2".into(), "1".into(), "discarded back to 1");
+        history.rewind_to(on_disk);
         assert_eq!(history.undo_label(), Some("written"));
-        history.rewind_to("30");
+        history.rewind_to(None);
         assert_eq!(history.undo_label(), None);
     }
 
@@ -159,9 +178,10 @@ mod tests {
         let mut history = History::new();
         history.record("a".into(), "b".into(), "first");
         history.record("b".into(), "c".into(), "second");
+        let on_disk = history.head();
         history.undo();
         history.undo();
-        history.rewind_to("c");
+        history.rewind_to(on_disk);
         assert_eq!(history.undo_label(), Some("second"));
         assert_eq!(history.redo(), None);
     }

@@ -10,7 +10,7 @@ use planeui_core::aerospace::{AerospaceVersion, CliError, ReloadMessage, ReloadO
 use planeui_core::apply::{ApplyContext, ApplyOutcome, apply};
 use planeui_core::config_doc::{ConfigDoc, EditError, ParseError};
 use planeui_core::config_view::ConfigView;
-use planeui_core::history::{History, HistoryStep};
+use planeui_core::history::{EntryId, History, HistoryStep};
 use planeui_core::store::{DiskStamp, Loaded};
 use planeui_core::validate::{ValidationReport, validate};
 
@@ -101,6 +101,8 @@ pub enum ConfigEvent {
 struct Write {
     text: String,
     label: String,
+    /// The history state this text is, so a successful write tells history what is on disk.
+    head: Option<EntryId>,
 }
 
 #[derive(Debug, Default)]
@@ -128,6 +130,8 @@ pub struct ConfigModel {
     committed: String,
     /// The text last known to be on disk, which `stamp` describes.
     on_disk: String,
+    /// The history state `on_disk` is.
+    on_disk_head: Option<EntryId>,
     history: History,
     stamp: DiskStamp,
     last_result: SaveStatus,
@@ -161,6 +165,7 @@ impl ConfigModel {
             report,
             committed: loaded.text.clone(),
             on_disk: loaded.text,
+            on_disk_head: None,
             history: History::new(),
             stamp: loaded.stamp,
             last_result: SaveStatus::Idle,
@@ -242,7 +247,8 @@ impl ConfigModel {
             let label = label.into();
             let before = mem::replace(&mut self.committed, text.clone());
             self.history.record(before, text.clone(), label.clone());
-            self.enqueue(Write { text, label }, cx);
+            let head = self.history.head();
+            self.enqueue(Write { text, label, head }, cx);
         }
         cx.notify();
     }
@@ -338,6 +344,7 @@ impl ConfigModel {
                     Write {
                         text: step.text,
                         label,
+                        head: self.history.head(),
                     },
                     cx,
                 );
@@ -360,7 +367,7 @@ impl ConfigModel {
     fn start_write(&mut self, write: Write, cx: &mut Context<Self>) {
         let context = self.context.clone();
         let stamp = self.stamp.clone();
-        let Write { text, label } = write;
+        let Write { text, label, head } = write;
         let task = cx.spawn(async move |this, cx| {
             let (text, outcome) = cx
                 .background_spawn(async move {
@@ -368,9 +375,9 @@ impl ConfigModel {
                     (text, outcome)
                 })
                 .await;
-            log_if_released(
-                this.update(cx, |this, cx| this.finish_write(label, &text, outcome, cx)),
-            );
+            log_if_released(this.update(cx, |this, cx| {
+                this.finish_write(label, &text, head, outcome, cx);
+            }));
         });
         self.queue = WriteQueue::Busy {
             _task: task,
@@ -382,6 +389,7 @@ impl ConfigModel {
         &mut self,
         label: String,
         text: &str,
+        head: Option<EntryId>,
         outcome: ApplyOutcome,
         cx: &mut Context<Self>,
     ) {
@@ -402,6 +410,7 @@ impl ConfigModel {
             ApplyOutcome::Written { reload, new_stamp } => {
                 self.stamp = new_stamp;
                 text.clone_into(&mut self.on_disk);
+                self.on_disk_head = head;
                 if let Some(state) = AerospaceState::after_reload(&reload) {
                     self.aerospace.state = state;
                 }
@@ -444,10 +453,11 @@ impl ConfigModel {
                 // The external edit is a change like any other, so undo reverts it first and
                 // redo can bring it back instead of losing it.
                 let previous = mem::replace(&mut self.on_disk, current.text.clone());
-                self.history.rewind_to(&previous);
+                self.history.rewind_to(self.on_disk_head);
                 self.history.note_external_change();
                 self.history
                     .record(previous, current.text, "Edit made outside PlaneUI");
+                self.on_disk_head = self.history.head();
                 cx.emit(ConfigEvent::ReloadedFromDisk { discarded });
             }
             Err(error) => {
@@ -759,5 +769,27 @@ mod tests {
             ORIGINAL,
             "discarded edits are not undo targets"
         );
+    }
+
+    #[gpui_kit::test]
+    fn undo_never_resurrects_a_discarded_change_that_repeats_a_written_value(
+        cx: &mut TestAppContext,
+    ) {
+        let fixture = Fixture::new(ORIGINAL);
+        let model = fixture.model(cx);
+        set_padding(&model, 1, cx);
+        cx.run_until_parked();
+        let written = fixture.disk();
+        set_padding(&model, 2, cx);
+        set_padding(&model, 1, cx);
+        fixture.write_disk("accordion-padding = 99\n");
+        cx.run_until_parked();
+
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), written);
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL, "discarded value resurrected");
     }
 }
