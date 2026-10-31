@@ -352,3 +352,120 @@ fn top_level(document: &ConfigDoc) -> Vec<(String, String)> {
         .map(|(key, item)| (key.to_owned(), item.to_string()))
         .collect()
 }
+
+/// Each `[[a]]` element's id and the values of its nested `[a.x.y]` and `[[a.z]]` tables.
+fn rule_groups(text: &str) -> Vec<(i64, Vec<i64>)> {
+    let document: toml_edit::DocumentMut = text.parse().unwrap();
+    document["a"]
+        .as_array_of_tables()
+        .unwrap()
+        .iter()
+        .map(|element| {
+            let mut nested = Vec::new();
+            if let Some(x) = element.get("x") {
+                nested.push(x["y"]["v"].as_integer().unwrap());
+            }
+            if let Some(z) = element.get("z") {
+                for table in z.as_array_of_tables().unwrap() {
+                    nested.push(table["v"].as_integer().unwrap());
+                }
+            }
+            (element["id"].as_integer().unwrap(), nested)
+        })
+        .collect()
+}
+
+fn element(id: i64) -> Value {
+    let mut table = toml_edit::InlineTable::new();
+    table.insert("id", Value::from(id));
+    Value::InlineTable(table)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Table-array edits keep each element with its sub-tables, never touch unrelated tables,
+    /// and a move followed by its inverse is byte-identical.
+    #[test]
+    fn table_array_edits_keep_elements_whole(
+        shape in proptest::collection::vec((any::<bool>(), 0usize..3, any::<bool>()), 1..5),
+        steps in proptest::collection::vec((0u8..4, any::<usize>(), any::<usize>()), 0..20),
+    ) {
+        let mut source = String::from("root = 42\n");
+        let mut model: Vec<(i64, Vec<i64>)> = Vec::new();
+        let (mut has_b, mut has_c) = (false, false);
+        for (index, (has_x, z_count, interleave)) in shape.iter().enumerate() {
+            let id = i64::try_from(index).unwrap();
+            let mut nested = Vec::new();
+            write!(source, "[[a]]\nid={id}\n").unwrap();
+            if *interleave && !has_b {
+                source.push_str("[b]\nv=100\n");
+                has_b = true;
+            }
+            if *has_x {
+                write!(source, "[a.x.y]\nv={id}\n").unwrap();
+                nested.push(id);
+            }
+            if *interleave && !has_c {
+                source.push_str("[c]\nv=200\n");
+                has_c = true;
+            }
+            for z in 0..*z_count {
+                write!(source, "[[a.z]]\nv={z}\n").unwrap();
+                nested.push(i64::try_from(z).unwrap());
+            }
+            model.push((id, nested));
+        }
+
+        let path = path(["a"]);
+        let mut document = ConfigDoc::parse(&source).unwrap();
+        document.array_move(&path, 0, 0).unwrap();
+        prop_assert_eq!(document.to_string(), source.clone());
+
+        for (step, (kind, first, second)) in steps.into_iter().enumerate() {
+            let len = model.len();
+            let (from, to) = (first % len, second % len);
+            let before = document.to_string();
+            document.array_move(&path, from, to).unwrap();
+            document.array_move(&path, to, from).unwrap();
+            prop_assert_eq!(document.to_string(), before);
+
+            let id = 1000 + i64::try_from(step).unwrap();
+            match kind {
+                0 => {
+                    let index = first % (len + 1);
+                    document.array_insert(&path, index, element(id)).unwrap();
+                    model.insert(index, (id, Vec::new()));
+                }
+                1 => {
+                    document.array_move(&path, from, to).unwrap();
+                    let moved = model.remove(from);
+                    model.insert(to, moved);
+                }
+                2 if len > 1 => {
+                    document.array_remove(&path, from).unwrap();
+                    model.remove(from);
+                }
+                2 => {}
+                _ => {
+                    document.array_set(&path, from, element(id)).unwrap();
+                    model[from] = (id, Vec::new());
+                }
+            }
+
+            let output = document.to_string();
+            prop_assert_eq!(rule_groups(&output), model.clone(), "{}", output);
+            let parsed: toml_edit::DocumentMut = output.parse().unwrap();
+            prop_assert_eq!(parsed["root"].as_integer(), Some(42));
+            if has_b {
+                prop_assert_eq!(parsed["b"]["v"].as_integer(), Some(100));
+            }
+            if has_c {
+                prop_assert_eq!(parsed["c"]["v"].as_integer(), Some(200));
+            }
+            if has_b && has_c {
+                prop_assert!(output.find("[b]") < output.find("[c]"));
+            }
+        }
+    }
+}
