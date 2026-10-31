@@ -378,6 +378,9 @@ pub struct WorkspaceAssignment {}
 pub struct ConfigView {
     /// General settings.
     pub general: General,
+    /// Explicit persistent workspaces, in array order.
+    pub persistent_workspaces: Field<Vec<String>>,
+    pub(crate) inferred_workspaces: Vec<String>,
     /// Gaps.
     pub gaps: Gaps,
     /// Binding modes with `main` first, then the remaining modes in file order.
@@ -444,6 +447,13 @@ impl ConfigView {
 
         Self {
             general,
+            persistent_workspaces: typed(field("persistent-workspaces"), |item| {
+                item.as_array()?
+                    .iter()
+                    .map(|value| value.as_str().map(str::to_owned))
+                    .collect()
+            }),
+            inferred_workspaces: crate::settings::infer_workspaces(document),
             gaps: Gaps::from_doc(document),
             modes,
             key_mapping,

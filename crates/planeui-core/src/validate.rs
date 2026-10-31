@@ -94,6 +94,7 @@ pub const RULES: &[Rule] = &[
     schema,
     gap_values,
     setting_values,
+    workspace_values,
     invalid_chords,
     duplicate_chords,
     mode_references,
@@ -134,6 +135,43 @@ fn setting_values(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<Vali
                 kind: IssueKind::InvalidValue,
             });
         }
+    }
+}
+
+fn workspace_values(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    let version = view.general.config_version.value().copied().unwrap_or(1);
+    let mut invalid = |key: &str, message: &str| {
+        issues.push(ValidationIssue {
+            key_path: Some(KeyPath::from([key])),
+            span: None,
+            severity: Severity::Error,
+            kind: IssueKind::InvalidValue,
+            message: message.to_owned(),
+        });
+    };
+    if !matches!(version, 1 | 2) {
+        invalid("config-version", "config-version must be 1 or 2");
+    }
+    if version == 1
+        && document
+            .get(&KeyPath::from(["persistent-workspaces"]))
+            .is_some()
+    {
+        invalid(
+            "persistent-workspaces",
+            "persistent-workspaces requires config-version = 2",
+        );
+    }
+    if let Some(names) = view.persistent_workspaces.value()
+        && names
+            .iter()
+            .enumerate()
+            .any(|(index, name)| names.iter().take(index).any(|earlier| earlier == name))
+    {
+        invalid(
+            "persistent-workspaces",
+            "persistent-workspaces contains duplicate names",
+        );
     }
 }
 

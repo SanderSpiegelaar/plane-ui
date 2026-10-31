@@ -306,3 +306,215 @@ pub fn reset_setting(doc: &mut ConfigDoc, setting: Setting) -> Result<(), Settin
     }
     Ok(())
 }
+
+/// A refused persistent-workspace edit.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspaceEditError {
+    /// Explicit persistent workspaces require version 2.
+    #[error("persistent-workspaces requires config-version = 2")]
+    Version,
+    /// A name occurs more than once.
+    #[error("persistent workspace {0:?} already exists")]
+    Duplicate(String),
+    /// A lossless edit failed.
+    #[error(transparent)]
+    Edit(#[from] EditError),
+}
+
+fn persistent_path() -> KeyPath {
+    KeyPath::from(["persistent-workspaces"])
+}
+
+fn ensure_version_two(doc: &ConfigDoc) -> Result<(), WorkspaceEditError> {
+    if doc
+        .get(&KeyPath::from(["config-version"]))
+        .and_then(Item::as_integer)
+        == Some(2)
+    {
+        Ok(())
+    } else {
+        Err(WorkspaceEditError::Version)
+    }
+}
+
+/// Upgrades to version 2, optionally preserving version 1's inferred workspaces.
+///
+/// # Errors
+/// Refuses duplicate prefill names or a lossless edit failure. The original is unchanged.
+pub fn upgrade_config_version(
+    doc: &mut ConfigDoc,
+    prefill: Option<Vec<String>>,
+) -> Result<(), WorkspaceEditError> {
+    let mut edited = doc.clone();
+    edited.set_value(&KeyPath::from(["config-version"]), 2.into())?;
+    if let Some(names) = prefill {
+        for (index, name) in names.iter().enumerate() {
+            if names.iter().take(index).any(|earlier| earlier == name) {
+                return Err(WorkspaceEditError::Duplicate(name.clone()));
+            }
+        }
+        edited.set_value(
+            &persistent_path(),
+            toml_edit::Array::from_iter(names).into(),
+        )?;
+    }
+    *doc = edited;
+    Ok(())
+}
+
+/// Appends a workspace, creating the array when absent.
+///
+/// # Errors
+/// Refuses version 1, duplicate names, or a lossless edit failure.
+pub fn add_persistent_workspace(doc: &mut ConfigDoc, name: &str) -> Result<(), WorkspaceEditError> {
+    ensure_version_two(doc)?;
+    let path = persistent_path();
+    let mut edited = doc.clone();
+    if let Some(array) = edited.get(&path).and_then(Item::as_array) {
+        if array.iter().any(|value| value.as_str() == Some(name)) {
+            return Err(WorkspaceEditError::Duplicate(name.to_owned()));
+        }
+        let len = array.len();
+        edited.array_insert(&path, len, name.into())?;
+    } else if edited.get(&path).is_none() {
+        edited.set_value(&path, toml_edit::Array::from_iter([name]).into())?;
+    } else {
+        return Err(EditError::NotAnArray(path).into());
+    }
+    *doc = edited;
+    Ok(())
+}
+
+/// Removes a persistent workspace by its position.
+///
+/// # Errors
+/// Refuses version 1 or a lossless array edit failure.
+pub fn remove_persistent_workspace(
+    doc: &mut ConfigDoc,
+    index: usize,
+) -> Result<(), WorkspaceEditError> {
+    ensure_version_two(doc)?;
+    doc.array_remove(&persistent_path(), index)?;
+    Ok(())
+}
+
+/// Reorders a workspace with its comments.
+///
+/// # Errors
+/// Refuses version 1 or a lossless array edit failure.
+pub fn move_persistent_workspace(
+    doc: &mut ConfigDoc,
+    from: usize,
+    to: usize,
+) -> Result<(), WorkspaceEditError> {
+    ensure_version_two(doc)?;
+    doc.array_move(&persistent_path(), from, to)?;
+    Ok(())
+}
+
+/// Version 1's inferred names, deduplicated in binding order, then assignment order.
+/// Includes both workspace switches and window moves, as AeroSpace does.
+#[must_use]
+pub fn inferred_persistent_workspaces(view: &crate::config_view::ConfigView) -> Vec<String> {
+    view.inferred_workspaces.clone()
+}
+
+pub(crate) fn infer_workspaces(doc: &ConfigDoc) -> Vec<String> {
+    use crate::commands::{Command, WorkspaceTarget};
+    let mut names = Vec::new();
+    let mut add = |name: String| {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    };
+    if let Some(modes) = doc
+        .get(&KeyPath::from(["mode"]))
+        .and_then(Item::as_table_like)
+    {
+        for (_, mode) in modes.iter() {
+            if let Some(bindings) = mode
+                .as_table_like()
+                .and_then(|mode| mode.get("binding"))
+                .and_then(Item::as_table_like)
+            {
+                for (_, binding) in bindings.iter() {
+                    let texts: Vec<&str> = if let Some(text) = binding.as_str() {
+                        vec![text]
+                    } else {
+                        binding
+                            .as_array()
+                            .map(|array| array.iter().filter_map(Value::as_str).collect())
+                            .unwrap_or_default()
+                    };
+                    let commands: Vec<Command> =
+                        texts.into_iter().flat_map(shell_commands).collect();
+                    // AeroSpace collects switches before moves within each binding.
+                    for moves in [false, true] {
+                        for command in &commands {
+                            let target = match command {
+                                Command::Workspace { target, .. } if !moves => Some(target),
+                                Command::MoveNodeToWorkspace { target, .. } if moves => {
+                                    Some(target)
+                                }
+                                _ => None,
+                            };
+                            if let Some(WorkspaceTarget::Name(name)) = target {
+                                add(name.as_str().to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(assignments) = doc
+        .get(&KeyPath::from(["workspace-to-monitor-force-assignment"]))
+        .and_then(Item::as_table_like)
+    {
+        for (name, _) in assignments.iter() {
+            add(name.to_owned());
+        }
+    }
+    names
+}
+
+fn shell_commands(text: &str) -> Vec<crate::commands::Command> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut segment = String::new();
+    let mut segments = Vec::new();
+    for character in text.chars() {
+        if escaped {
+            segment.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote != Some('\'') {
+            segment.push(character);
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            segment.push(character);
+            if character == delimiter {
+                quote = None;
+            }
+        } else if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            segment.push(character);
+        } else if matches!(character, ';' | '|' | '&' | '(' | ')') {
+            // exec-and-forget owns the remainder as a shell command, not AeroSpace commands.
+            if segment.trim_start().starts_with("exec-and-forget ") {
+                break;
+            }
+            segments.push(std::mem::take(&mut segment));
+        } else {
+            segment.push(character);
+        }
+    }
+    segments.push(segment);
+    segments
+        .into_iter()
+        .filter_map(|text| crate::commands::Command::parse(text.trim()).ok())
+        .collect()
+}

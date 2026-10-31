@@ -971,6 +971,7 @@ struct EdgeDecor {
     last_suffix: String,
     interior_prefix: String,
     interior_suffix: String,
+    following_comments: Vec<String>,
 }
 
 impl EdgeDecor {
@@ -1004,6 +1005,15 @@ impl EdgeDecor {
             first_prefix,
             interior_prefix,
             interior_suffix,
+            following_comments: (0..array.len())
+                .map(|index| {
+                    let following = array.get(index + 1).map_or_else(
+                        || raw(Some(array.trailing()), ""),
+                        |value| raw(value.decor().prefix(), ""),
+                    );
+                    inline_array_comment(&following).0.to_owned()
+                })
+                .collect(),
         }
     }
 
@@ -1016,6 +1026,13 @@ impl EdgeDecor {
             };
             let (prefix, suffix) = self.slot(index, new_len);
             let decor = value.decor_mut();
+            // TOML stores a post-comma comment on the next value, but it belongs to the
+            // preceding element. Detach it before assigning spacing to the new slots.
+            let original_prefix = raw(decor.prefix(), "");
+            let (_, clean_prefix) = inline_array_comment(&original_prefix);
+            if clean_prefix != original_prefix {
+                decor.set_prefix(clean_prefix);
+            }
             match origin {
                 None => {
                     decor.set_prefix(prefix);
@@ -1032,6 +1049,28 @@ impl EdgeDecor {
                 }
             }
         }
+        for index in 0..new_len {
+            let comment = index
+                .checked_sub(1)
+                .and_then(|previous| origins.get(previous).copied().flatten())
+                .and_then(|origin| self.following_comments.get(origin))
+                .map_or("", String::as_str);
+            if !comment.is_empty()
+                && let Some(value) = array.get_mut(index)
+            {
+                let prefix = raw(value.decor().prefix(), "");
+                value.decor_mut().set_prefix(format!("{comment}{prefix}"));
+            }
+        }
+        let trailing = raw(Some(array.trailing()), "");
+        let (_, clean_trailing) = inline_array_comment(&trailing);
+        let last_comment = origins
+            .last()
+            .copied()
+            .flatten()
+            .and_then(|origin| self.following_comments.get(origin))
+            .map_or("", String::as_str);
+        array.set_trailing(format!("{last_comment}{clean_trailing}"));
     }
 
     fn slot(&self, index: usize, len: usize) -> (&str, &str) {
@@ -1046,6 +1085,16 @@ impl EdgeDecor {
             &self.interior_suffix
         };
         (prefix, suffix)
+    }
+}
+
+fn inline_array_comment(prefix: &str) -> (&str, &str) {
+    if let Some((line, _)) = prefix.split_once('\n')
+        && line.trim_start().starts_with('#')
+    {
+        (line, prefix.get(line.len()..).unwrap_or_default())
+    } else {
+        ("", prefix)
     }
 }
 

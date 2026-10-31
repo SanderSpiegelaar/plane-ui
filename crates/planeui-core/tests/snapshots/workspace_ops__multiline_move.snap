@@ -1,0 +1,11 @@
+---
+source: crates/planeui-core/tests/workspace_ops.rs
+assertion_line: 71
+expression: "TextDiff::from_lines(source,\n&doc.to_string()).unified_diff().context_radius(1).to_string()"
+---
+@@ -2,4 +2,4 @@
+ persistent-workspaces = [
++    'B', # beta
+     'A', # alpha
+-    'B', # beta
+ ]
