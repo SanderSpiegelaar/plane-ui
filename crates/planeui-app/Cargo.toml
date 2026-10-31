@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "planeui_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "PlaneUI"
 path = "src/main.rs"
@@ -16,6 +20,11 @@ gpui-kit.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+planeui-core = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true
