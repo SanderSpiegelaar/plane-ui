@@ -171,14 +171,16 @@ impl ConfigDoc {
             ArrayMut::Tables(tables) => {
                 check_index(path, index, tables.len(), true)?;
                 let mut table = into_section(path, value)?;
-                // Before element `index`: take its header's position. Appending: take the last
-                // position the previous element's group uses, so its sub-tables stay with it.
+                // Positions are unique and even (see `normalize_positions`), so the odd slot
+                // just before element `index`, or just after the previous element's last
+                // sub-table when appending, renders exactly there.
                 let position = match tables.get(index) {
-                    Some(next) => next.position(),
+                    Some(next) => next.position().map(|position| position - 1),
                     None => index
                         .checked_sub(1)
                         .and_then(|last| tables.get(last))
-                        .and_then(|previous| section_positions(previous).into_iter().max()),
+                        .and_then(|previous| section_positions(previous).into_iter().max())
+                        .map(|position| position + 1),
                 };
                 table.set_position(position);
                 tables.insert(index, table);
@@ -311,6 +313,7 @@ impl ConfigDoc {
 
     fn array_mut(&mut self, path: &KeyPath) -> Result<ArrayMut<'_>, EditError> {
         self.ensure_editable()?;
+        normalize_positions(self.document.as_table_mut());
         let item = path
             .segments()
             .iter()
@@ -437,6 +440,70 @@ fn check_index(path: &KeyPath, index: usize, len: usize, appending: bool) -> Res
             len,
         })
     }
+}
+
+/// Renumbers every table header to a unique even position in the order `toml_edit` renders
+/// them now, so the output is unchanged. Parsed and inserted headers can share a position,
+/// and `toml_edit` breaks such ties by tree order, which position arithmetic cannot see.
+fn normalize_positions(root: &mut Table) {
+    fn collect(table: &Table, out: &mut Vec<Option<isize>>) {
+        if !table.is_dotted() {
+            out.push(table.position());
+        }
+        for (_, item) in table {
+            match item {
+                Item::Table(child) => collect(child, out),
+                Item::ArrayOfTables(children) => {
+                    for child in children {
+                        collect(child, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn assign(table: &mut Table, positions: &mut impl Iterator<Item = isize>) {
+        if !table.is_dotted()
+            && let Some(position) = positions.next()
+        {
+            table.set_position(Some(position));
+        }
+        for (_, item) in table.iter_mut() {
+            match item {
+                Item::Table(child) => assign(child, positions),
+                Item::ArrayOfTables(children) => {
+                    for child in children.iter_mut() {
+                        assign(child, positions);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut visited = Vec::new();
+    collect(root, &mut visited);
+    // Mirrors `DocumentMut`'s Display: a header without a position inherits the last one seen
+    // in tree order, the root renders first, and ties keep tree order (stable sort).
+    let mut last = 0;
+    let inherited: Vec<isize> = visited
+        .iter()
+        .map(|position| {
+            if let Some(position) = position {
+                last = *position;
+            }
+            last
+        })
+        .collect();
+    let mut render_order: Vec<usize> = (0..inherited.len()).collect();
+    render_order.sort_by_key(|&index| (index != 0, inherited.get(index).copied()));
+    let mut new_positions = vec![0; inherited.len()];
+    for (rank, index) in render_order.into_iter().enumerate() {
+        if let Some(slot) = new_positions.get_mut(index) {
+            *slot = isize::try_from(rank).unwrap_or(isize::MAX / 2) * 2 + 2;
+        }
+    }
+    assign(root, &mut new_positions.into_iter());
 }
 
 /// Positions of `table`'s header and every header nested under it, in render-visit order.
@@ -1190,6 +1257,47 @@ mod tests {
         );
         let back = edited(&there, |document| document.array_move(&path, 1, 0));
         assert_eq!(back, source);
+    }
+
+    #[test]
+    fn normalizing_positions_never_changes_rendering() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "toml") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            let mut document = ConfigDoc::parse(&source).unwrap();
+            normalize_positions(document.document.as_table_mut());
+            assert_eq!(document.to_string(), source, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn moving_an_inserted_element_and_back_is_exact() {
+        let source = "[[a]]\nid=1\n[b]\nv=9\n[a.x]\nv=1\n[[a]]\nid=2\n";
+        let path = KeyPath::from(["a"]);
+        let mut element = InlineTable::new();
+        element.insert("id", int(3));
+        let inserted = edited(source, |document| {
+            document.array_insert(&path, 0, Value::InlineTable(element))
+        });
+        assert!(inserted.find("[b]") < inserted.find("[a.x]"), "{inserted}");
+        let there_and_back = edited(&inserted, |document| {
+            document.array_move(&path, 0, 1)?;
+            document.array_move(&path, 1, 0)
+        });
+        assert_eq!(there_and_back, inserted);
+        let mut document = ConfigDoc::parse(source).unwrap();
+        let mut element = InlineTable::new();
+        element.insert("id", int(3));
+        document
+            .array_insert(&path, 0, Value::InlineTable(element))
+            .unwrap();
+        document.array_move(&path, 0, 1).unwrap();
+        document.array_move(&path, 1, 0).unwrap();
+        assert_eq!(document.to_string(), inserted);
     }
 
     #[test]
