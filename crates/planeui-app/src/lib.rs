@@ -3,6 +3,7 @@
 pub mod config_model;
 pub mod debug_control;
 pub mod fields;
+pub mod keybindings;
 pub mod shell;
 pub mod snapshots;
 pub mod startup;
