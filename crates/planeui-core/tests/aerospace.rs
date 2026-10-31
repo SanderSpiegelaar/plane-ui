@@ -55,8 +55,10 @@ fn write_script(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Replays are not about timing; a loaded machine running the whole workspace in parallel can
+/// take seconds to start `/bin/sh`, so they get far more than the 3 s production deadline.
 fn replaying(case: &str) -> CliAerospace {
-    CliAerospace::with_binary(FAKE_BINARIES.path().join(case))
+    CliAerospace::with_binary(FAKE_BINARIES.path().join(case)).with_timeout(Duration::from_secs(30))
 }
 
 fn args_passed_to(case: &str) -> String {
