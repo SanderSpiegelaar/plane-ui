@@ -7,10 +7,11 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, TestSupportExt as _, Window, div,
 };
+use planeui_core::config_doc::line_and_column;
 use planeui_core::config_view::Field;
 use planeui_core::settings::{
     Setting, SettingValue, inferred_persistent_workspaces, reset_setting, set_setting,
@@ -146,6 +147,10 @@ impl GeneralView {
             error: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some() || self.padding.read(cx).has_error()
     }
 
     fn set(&mut self, setting: Setting, value: SettingValue, cx: &mut Context<Self>) {
@@ -332,6 +337,46 @@ impl Render for GeneralView {
             .when_some(self.error.clone(), |view, error| {
                 view.child(div().text_color(cx.theme().danger).child(error))
             })
+            .children(self.render_other_settings(cx))
+    }
+}
+
+impl GeneralView {
+    /// Keys no form edits, so the user knows PlaneUI saw them and leaves them alone.
+    fn render_other_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let model = self.model.read(cx);
+        let keys = &model.view().out_of_scope;
+        if keys.is_empty() {
+            return None;
+        }
+        let text = model.doc().to_string();
+        let muted = cx.theme().muted_foreground;
+        let rows = keys.iter().map(|key| {
+            let line = key
+                .span
+                .as_ref()
+                .map(|span| format!("line {}", line_and_column(&text, span.start).0));
+            h_flex()
+                .id(SharedString::from(format!("other-{}", key.value)))
+                .test_support()
+                .aria_label(SharedString::from(match &line {
+                    Some(line) => format!("{}, {line}, kept as is", key.value),
+                    None => format!("{}, kept as is", key.value),
+                }))
+                .gap_4()
+                .child(div().flex_1().min_w_0().child(key.value.to_string()))
+                .children(line.map(|line| div().text_color(muted).child(line)))
+                .child(div().text_color(muted).child("kept as is"))
+        });
+        Some(
+            v_flex()
+                .id("other-settings")
+                .gap_2()
+                .pt_4()
+                .child(div().text_lg().child("Other settings in your file"))
+                .children(rows)
+                .into_any_element(),
+        )
     }
 }
 
@@ -388,6 +433,34 @@ mod tests {
                 .to_string()),
             "30"
         );
+    }
+
+    #[gpui_kit::test]
+    fn keys_no_form_edits_are_listed_with_their_line(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(
+            "accordion-padding = 30\nafter-startup-command = ['exec-and-forget true']\n",
+        );
+        let model = fixture.model(cx);
+        let (window, _) = open_window(cx, |window, cx| GeneralView::new(model.clone(), window, cx));
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("other-after-startup-command").label(),
+                Some("after-startup-command, line 2, kept as is")
+            );
+            assert!(window.try_find("other-accordion-padding").is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn no_other_settings_list_when_every_key_is_edited(cx: &mut TestAppContext) {
+        let fixture = Fixture::new("accordion-padding = 30\n");
+        let model = fixture.model(cx);
+        let (window, _) = open_window(cx, |window, cx| GeneralView::new(model.clone(), window, cx));
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("other-settings").is_none());
+        });
     }
 
     #[gpui_kit::test]

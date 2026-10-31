@@ -14,7 +14,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Action, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Keystroke,
+    Action, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Keystroke,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, TestSupportExt as _, Window, div,
 };
@@ -78,6 +78,14 @@ impl KeybindingsView {
     }
 
     /// Starts on main and follows changes to the config, including external reloads.
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some()
+            || self
+                .form
+                .as_ref()
+                .is_some_and(|form| form.read(cx).has_invalid_field(cx))
+    }
+
     pub fn new(model: Entity<ConfigModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe_in(&model, window, |this, _, window, cx| {
             let model = this.model.read(cx);
