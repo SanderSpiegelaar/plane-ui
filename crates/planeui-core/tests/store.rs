@@ -686,3 +686,17 @@ fn creating_the_default_config_keeps_a_file_that_appeared_meanwhile() {
 
     assert_eq!(fs::read_to_string(&path).unwrap(), "# mine\n");
 }
+
+#[test]
+fn write_new_never_replaces_an_existing_file_and_leaves_no_temp_file() {
+    let (_dir, root) = temp_root().unwrap();
+    let path = root.join("aerospace.toml");
+    let store = ConfigStore::new(&ResolvedConfig::new_file(path.clone()));
+
+    assert!(store.write_new(b"first\n").unwrap());
+    assert!(!store.write_new(b"second\n").unwrap());
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "first\n");
+    let entries: Vec<_> = fs::read_dir(&root).unwrap().collect();
+    assert_eq!(entries.len(), 1, "only the config remains");
+}

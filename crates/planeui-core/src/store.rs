@@ -73,14 +73,8 @@ pub const DEFAULT_CONFIG: &str = include_str!("../tests/fixtures/aerospace-defau
 ///
 /// `path` cannot be inspected, or the write fails.
 pub fn create_default_config(path: &Path) -> Result<(), WriteError> {
-    let exists = path.try_exists().map_err(|source| WriteError::Resolve {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !exists {
-        ConfigStore::new(&ResolvedConfig::new_file(path.to_path_buf()))
-            .write_atomic(DEFAULT_CONFIG.as_bytes())?;
-    }
+    ConfigStore::new(&ResolvedConfig::new_file(path.to_path_buf()))
+        .write_new(DEFAULT_CONFIG.as_bytes())?;
     Ok(())
 }
 
@@ -382,6 +376,22 @@ impl ConfigStore {
     ///
     /// Any failing step; the temporary file is removed and the target left as it was.
     pub fn write_atomic(&self, bytes: &[u8]) -> Result<DiskStamp, WriteError> {
+        self.write_via_temp(bytes, Publish::Replace)?;
+        Ok(DiskStamp::of(bytes))
+    }
+
+    /// Writes `bytes` only if nothing exists at the target, atomically and without a window
+    /// in which a file created by someone else could be replaced. Returns `false`, leaving the
+    /// existing file alone, when the target exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WriteError`] when any step fails; no partial file is left behind.
+    pub fn write_new(&self, bytes: &[u8]) -> Result<bool, WriteError> {
+        self.write_via_temp(bytes, Publish::CreateNew)
+    }
+
+    fn write_via_temp(&self, bytes: &[u8], publish: Publish) -> Result<bool, WriteError> {
         let target = self.resolved_target()?;
         let directory = target
             .parent()
@@ -417,14 +427,32 @@ impl ConfigStore {
                 source,
             });
         }
-        if let Err(source) = fs::rename(&temp_path, &target) {
-            remove_temp_file(&temp_path);
-            return Err(WriteError::Rename {
-                path: target,
-                source,
-            });
+        let published = match publish {
+            Publish::Replace => fs::rename(&temp_path, &target),
+            // link(2) fails if the target exists, so a file that appeared since the caller
+            // checked is never replaced.
+            Publish::CreateNew => {
+                let linked = fs::hard_link(&temp_path, &target);
+                remove_temp_file(&temp_path);
+                linked
+            }
+        };
+        match published {
+            Ok(()) => Ok(true),
+            Err(error)
+                if publish == Publish::CreateNew
+                    && error.kind() == io::ErrorKind::AlreadyExists =>
+            {
+                Ok(false)
+            }
+            Err(source) => {
+                remove_temp_file(&temp_path);
+                Err(WriteError::Rename {
+                    path: target,
+                    source,
+                })
+            }
         }
-        Ok(DiskStamp::of(bytes))
     }
 
     /// Resolves at write time too, in case the target became a symlink after it was located.
@@ -438,6 +466,12 @@ impl ConfigStore {
             }),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Publish {
+    Replace,
+    CreateNew,
 }
 
 fn create_temp_file(directory: &Path, target: &Path) -> Result<(PathBuf, File), WriteError> {
