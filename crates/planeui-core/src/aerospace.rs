@@ -183,6 +183,15 @@ impl fmt::Display for AerospaceVersion {
     }
 }
 
+/// Whether the installed major/minor series is newer than PlaneUI's command catalogue.
+/// Patch releases and pre-release labels do not change compatibility warnings.
+#[must_use]
+pub fn newer_than_catalogue(installed: &AerospaceVersion) -> bool {
+    AerospaceVersion::parse(crate::commands::CATALOGUE_VERSION).is_some_and(|catalogue| {
+        (installed.major, installed.minor) > (catalogue.major, catalogue.minor)
+    })
+}
+
 /// Why a call to the AeroSpace CLI produced no answer.
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
@@ -751,6 +760,30 @@ mod tests {
         for unknown in ["0.21", "0.21.3.1", "0.21.x", "0.21.3-", "v0.21.3"] {
             assert_eq!(AerospaceVersion::parse(unknown), None, "{unknown}");
         }
+    }
+
+    #[test]
+    fn catalogue_compatibility_compares_major_and_minor_only() {
+        for (installed, newer) in [
+            ("0.20.99", false),
+            ("0.20.99-Beta", false),
+            ("0.21.0", false),
+            ("0.21.3-Beta", false),
+            ("0.21.3", false),
+            ("0.21.99", false),
+            ("0.21.99-Beta", false),
+            ("0.22.0-Beta", true),
+            ("0.22.0", true),
+            ("1.0.0-Beta", true),
+            ("1.0.0", true),
+        ] {
+            assert_eq!(
+                newer_than_catalogue(&AerospaceVersion::parse(installed).unwrap()),
+                newer,
+                "{installed}"
+            );
+        }
+        assert!(AerospaceVersion::parse(crate::commands::CATALOGUE_VERSION).is_some());
     }
 
     #[test]

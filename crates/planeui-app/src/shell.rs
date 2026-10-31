@@ -15,6 +15,8 @@ use gpui_kit::{
     IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Task, TestSupportExt as _, Window, div,
 };
+use planeui_core::aerospace::newer_than_catalogue;
+use planeui_core::commands::CATALOGUE_VERSION;
 use planeui_core::config_doc::KeyPath;
 use planeui_core::prefs::{Prefs, PrefsStore};
 use planeui_core::store::UtcDateTime;
@@ -374,7 +376,8 @@ impl Shell {
         let aerospace = aerospace_text(model.aerospace());
         let status = status_text(&model.status());
         let muted = cx.theme().muted_foreground;
-        StatusBar::new()
+        let warning = compatibility_warning(model.aerospace());
+        let status_bar = StatusBar::new()
             .left(div().text_color(muted).child(path))
             .child(
                 div()
@@ -392,7 +395,22 @@ impl Shell {
                     .aria_label(status.clone())
                     .test_support()
                     .child(status),
-            )
+            );
+        v_flex()
+            .child(status_bar)
+            .when_some(warning, |footer, message| {
+                footer.child(
+                    StatusBar::new().child(
+                        div()
+                            .id("catalogue-warning")
+                            .role(Role::Status)
+                            .aria_label(message.clone())
+                            .test_support()
+                            .text_color(cx.theme().warning)
+                            .child(message),
+                    ),
+                )
+            })
     }
 }
 
@@ -479,6 +497,17 @@ fn aerospace_text(info: &AerospaceInfo) -> SharedString {
     }
 }
 
+fn compatibility_warning(info: &AerospaceInfo) -> Option<SharedString> {
+    let installed = info
+        .version
+        .as_ref()
+        .filter(|version| newer_than_catalogue(version))?;
+    let catalogue = CATALOGUE_VERSION
+        .rsplit_once('.')
+        .map_or(CATALOGUE_VERSION, |(series, _)| series);
+    Some(format!("AeroSpace {}.{} is newer than PlaneUI's command catalogue ({catalogue}): unknown commands stay read-only", installed.major, installed.minor).into())
+}
+
 /// How much of a time [`display_time`] shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeFormat {
@@ -536,6 +565,43 @@ mod tests {
             window.render_frame(cx);
             window.find(id).label().unwrap_or_default().to_owned()
         })
+    }
+
+    #[gpui_kit::test]
+    fn newer_aerospace_series_shows_the_catalogue_warning(cx: &mut TestAppContext) {
+        use planeui_core::aerospace::{AerospaceVersion, FakeAerospace};
+
+        let fixture = Fixture::with_aerospace(
+            ORIGINAL,
+            FakeAerospace::new().with_version(AerospaceVersion {
+                major: 0,
+                minor: 22,
+                patch: 1,
+                pre_release: Some("Beta".into()),
+            }),
+        );
+        let (window, shell) = open_shell(cx, &fixture);
+        model(cx, &shell).update(cx, ConfigModel::refresh_aerospace);
+        cx.run_until_parked();
+        assert_eq!(
+            status_label(cx, window, "catalogue-warning"),
+            "AeroSpace 0.22 is newer than PlaneUI's command catalogue (0.21): unknown commands stay read-only"
+        );
+        assert_eq!(status_label(cx, window, "save-status"), "No changes yet");
+        assert_eq!(fixture.disk(), ORIGINAL);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn same_aerospace_series_does_not_show_a_catalogue_warning(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        model(cx, &shell).update(cx, ConfigModel::refresh_aerospace);
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("catalogue-warning").is_none());
+        });
     }
 
     #[gpui_kit::test]
