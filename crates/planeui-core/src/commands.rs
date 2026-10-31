@@ -622,6 +622,24 @@ pub fn format_script(commands: &[Command], shape: ScriptShape) -> Value {
 }
 
 fn words(text: &str) -> Result<Vec<String>, Unsupported> {
+    tokenize(text, false).map(|tokens| {
+        tokens
+            .into_iter()
+            .filter_map(|token| match token {
+                ScriptToken::Word(word) => Some(word),
+                ScriptToken::And => None,
+            })
+            .collect()
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ScriptToken {
+    Word(String),
+    And,
+}
+
+pub(crate) fn tokenize(text: &str, conditions: bool) -> Result<Vec<ScriptToken>, Unsupported> {
     let mut chars = text.chars().peekable();
     let mut result = Vec::new();
     while let Some(character) = chars.next() {
@@ -629,6 +647,11 @@ fn words(text: &str) -> Result<Vec<String>, Unsupported> {
             return Err(unsupported("uses a newline outside exec-and-forget"));
         }
         if character.is_whitespace() {
+            continue;
+        }
+        if conditions && character == '&' && chars.peek() == Some(&'&') {
+            chars.next();
+            result.push(ScriptToken::And);
             continue;
         }
         let mut word = String::new();
@@ -644,12 +667,18 @@ fn words(text: &str) -> Result<Vec<String>, Unsupported> {
             if !closed {
                 return Err(unsupported("unclosed quote"));
             }
-            if chars.peek().is_some_and(|next| !next.is_whitespace()) {
+            if chars
+                .peek()
+                .is_some_and(|next| !(next.is_whitespace() || conditions && *next == '&'))
+            {
                 return Err(unsupported("expected whitespace after closing quote"));
             }
         } else {
             word.push(character);
-            while chars.peek().is_some_and(|next| !next.is_whitespace()) {
+            while chars
+                .peek()
+                .is_some_and(|next| !(next.is_whitespace() || conditions && *next == '&'))
+            {
                 if let Some(next) = chars.next() {
                     word.push(next);
                 }
@@ -659,13 +688,15 @@ fn words(text: &str) -> Result<Vec<String>, Unsupported> {
                     return Err(unsupported(format!("uses the shell operator `{operator}`")));
                 }
             }
-            if word.chars().any(|next| "'\"$~&?*!\\<>`#".contains(next)) {
+            if !(conditions && word == "~=")
+                && word.chars().any(|next| "'\"$~&?*!\\<>`#".contains(next))
+            {
                 return Err(unsupported(format!(
                     "unquoted reserved character in `{word}`"
                 )));
             }
         }
-        result.push(word);
+        result.push(ScriptToken::Word(word));
     }
     Ok(result)
 }
@@ -1173,7 +1204,7 @@ fn parse_layout(args: &Arguments) -> Result<Command, Unsupported> {
     })
 }
 
-fn quote(text: &str) -> String {
+pub(crate) fn quote(text: &str) -> String {
     if !text.is_empty()
         && text
             .chars()

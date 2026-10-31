@@ -1,0 +1,103 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 33
+expression: "(RuleContainer::read(&doc), rules)"
+---
+(
+    Some(
+        ArrayOfTables,
+    ),
+    [
+        WindowRule {
+            matcher: Conditions(
+                [
+                    AppBundleIdIs(
+                        "com.apple.finder",
+                    ),
+                    WindowTitleMatches(
+                        "Open dialog",
+                    ),
+                ],
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Floating,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                ],
+                shape: String,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                37..59,
+            ),
+        },
+        WindowRule {
+            matcher: Conditions(
+                [],
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Tiling,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                ],
+                shape: Array,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                188..210,
+            ),
+        },
+        WindowRule {
+            matcher: Conditions(
+                [],
+            ),
+            run: Editable {
+                commands: [],
+                shape: Array,
+            },
+            check_further_callbacks: Some(
+                true,
+            ),
+            span: Some(
+                271..293,
+            ),
+        },
+        WindowRule {
+            matcher: ReadOnly {
+                reason: "uses the shell operator `||`",
+            },
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Floating,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                ],
+                shape: String,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                361..383,
+            ),
+        },
+    ],
+)

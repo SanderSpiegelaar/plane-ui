@@ -44,6 +44,10 @@ pub enum IssueKind {
     NoWayBack,
     /// A binding intercepts a common macOS shortcut.
     MacOsShortcut,
+    /// A window rule omits a required field.
+    MissingRuleField,
+    /// A regex was rejected by Rust's engine, which differs from AeroSpace's engine.
+    Regex,
 }
 
 /// One problem found in a document.
@@ -95,6 +99,7 @@ pub const RULES: &[Rule] = &[
     gap_values,
     setting_values,
     workspace_values,
+    window_rules,
     invalid_chords,
     duplicate_chords,
     mode_references,
@@ -102,6 +107,100 @@ pub const RULES: &[Rule] = &[
     no_way_back,
     macos_shortcuts,
 ];
+
+/// Mirrors the required fields in the [AeroSpace rule parser](https://github.com/nikitabobko/AeroSpace/blob/v0.21.3-Beta/Sources/AppBundle/config/parseOnWindowDetected.swift).
+fn window_rules(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    use crate::rules::{Condition, Matcher, rule_tables};
+
+    let root = KeyPath::from(["on-window-detected"]);
+    for (index, (table, rule)) in rule_tables(document.get(&root))
+        .into_iter()
+        .zip(&view.window_rules)
+        .enumerate()
+    {
+        let mut issue = |field: &str, severity, kind, message| {
+            issues.push(ValidationIssue {
+                key_path: Some(root.join(index.to_string()).join(field)),
+                span: rule.span.clone(),
+                severity,
+                kind,
+                message,
+            });
+        };
+        if table.get("if").is_none() && rule.check_further_callbacks != Some(true) {
+            issue(
+                "if",
+                Severity::Error,
+                IssueKind::MissingRuleField,
+                "on-window-detected rule requires if unless check-further-callbacks is true"
+                    .to_owned(),
+            );
+        }
+        if table.get("run").is_none() {
+            issue(
+                "run",
+                Severity::Error,
+                IssueKind::MissingRuleField,
+                "on-window-detected rule requires run".to_owned(),
+            );
+        } else if table
+            .get("run")
+            .is_some_and(|item| !crate::config_view::ValueType::Commands.matches(item))
+        {
+            issue(
+                "run",
+                Severity::Error,
+                IssueKind::WrongType,
+                "on-window-detected run must be a command or an array of commands".to_owned(),
+            );
+        }
+        if table
+            .get("check-further-callbacks")
+            .is_some_and(|item| !item.is_bool())
+        {
+            issue(
+                "check-further-callbacks",
+                Severity::Error,
+                IssueKind::WrongType,
+                "on-window-detected check-further-callbacks must be true or false".to_owned(),
+            );
+        }
+        let patterns: Vec<&str> = match &rule.matcher {
+            Matcher::Conditions(conditions) => conditions
+                .iter()
+                .filter_map(|condition| match condition {
+                    Condition::AppNameMatches(pattern) | Condition::WindowTitleMatches(pattern) => {
+                        Some(pattern.as_str())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            Matcher::Legacy(legacy) => legacy
+                .app_name_regex_substring
+                .iter()
+                .chain(&legacy.window_title_regex_substring)
+                .map(String::as_str)
+                .collect(),
+            Matcher::ReadOnly { .. } => Vec::new(),
+        };
+        for pattern in patterns {
+            if regex::RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+                .is_err()
+            {
+                issue(
+                    "if",
+                    Severity::Warning,
+                    IssueKind::Regex,
+                    format!(
+                        "regex `{pattern}` could not be checked locally; AeroSpace's regex engine may accept it"
+                    ),
+                );
+            }
+        }
+    }
+}
 
 fn gap_values(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
     for field in crate::gaps::GapField::ALL {

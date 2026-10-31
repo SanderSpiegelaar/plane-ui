@@ -1,0 +1,122 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 33
+expression: "(RuleContainer::read(&doc), rules)"
+---
+(
+    Some(
+        ArrayOfTables,
+    ),
+    [
+        WindowRule {
+            matcher: Legacy(
+                LegacyMatcher {
+                    app_id: Some(
+                        "com.apple.finder",
+                    ),
+                    app_name_regex_substring: None,
+                    window_title_regex_substring: None,
+                    workspace: None,
+                    during_aerospace_startup: None,
+                },
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Floating,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                ],
+                shape: String,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                20..42,
+            ),
+        },
+        WindowRule {
+            matcher: Legacy(
+                LegacyMatcher {
+                    app_id: Some(
+                        "com.google.Chrome",
+                    ),
+                    app_name_regex_substring: None,
+                    window_title_regex_substring: Some(
+                        "Picture in Picture",
+                    ),
+                    workspace: None,
+                    during_aerospace_startup: None,
+                },
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Floating,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                    MoveNodeToWorkspace {
+                        target: Name(
+                            WorkspaceName(
+                                "9",
+                            ),
+                        ),
+                        focus_follows_window: false,
+                        fail_if_noop: false,
+                        window_id: None,
+                    },
+                ],
+                shape: Array,
+            },
+            check_further_callbacks: Some(
+                true,
+            ),
+            span: Some(
+                99..121,
+            ),
+        },
+        WindowRule {
+            matcher: Legacy(
+                LegacyMatcher {
+                    app_id: None,
+                    app_name_regex_substring: Some(
+                        "slack",
+                    ),
+                    window_title_regex_substring: None,
+                    workspace: None,
+                    during_aerospace_startup: Some(
+                        false,
+                    ),
+                },
+            ),
+            run: Editable {
+                commands: [
+                    MoveNodeToWorkspace {
+                        target: Name(
+                            WorkspaceName(
+                                "3",
+                            ),
+                        ),
+                        focus_follows_window: false,
+                        fail_if_noop: false,
+                        window_id: None,
+                    },
+                ],
+                shape: String,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                327..349,
+            ),
+        },
+    ],
+)

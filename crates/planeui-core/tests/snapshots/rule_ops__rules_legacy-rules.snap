@@ -1,0 +1,94 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 33
+expression: "(RuleContainer::read(&doc), rules)"
+---
+(
+    Some(
+        ArrayOfTables,
+    ),
+    [
+        WindowRule {
+            matcher: Legacy(
+                LegacyMatcher {
+                    app_id: Some(
+                        "com.apple.systempreferences",
+                    ),
+                    app_name_regex_substring: Some(
+                        "settings",
+                    ),
+                    window_title_regex_substring: Some(
+                        "substring",
+                    ),
+                    workspace: Some(
+                        "workspace-name",
+                    ),
+                    during_aerospace_startup: Some(
+                        true,
+                    ),
+                },
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Floating,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                    MoveNodeToWorkspace {
+                        target: Name(
+                            WorkspaceName(
+                                "S",
+                            ),
+                        ),
+                        focus_follows_window: false,
+                        fail_if_noop: false,
+                        window_id: None,
+                    },
+                ],
+                shape: Array,
+            },
+            check_further_callbacks: Some(
+                true,
+            ),
+            span: Some(
+                20..42,
+            ),
+        },
+        WindowRule {
+            matcher: Legacy(
+                LegacyMatcher {
+                    app_id: Some(
+                        "org.alacritty",
+                    ),
+                    app_name_regex_substring: None,
+                    window_title_regex_substring: None,
+                    workspace: None,
+                    during_aerospace_startup: None,
+                },
+            ),
+            run: Editable {
+                commands: [
+                    Layout {
+                        options: [
+                            Tiling,
+                        ],
+                        window_id: None,
+                        workspace: None,
+                        root: false,
+                        fail_if_noop: false,
+                    },
+                ],
+                shape: String,
+            },
+            check_further_callbacks: None,
+            span: Some(
+                325..347,
+            ),
+        },
+    ],
+)

@@ -1,0 +1,9 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 33
+expression: "(RuleContainer::read(&doc), rules)"
+---
+(
+    None,
+    [],
+)

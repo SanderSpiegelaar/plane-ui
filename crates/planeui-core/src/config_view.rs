@@ -12,6 +12,8 @@ use crate::gaps::{GapField, GapValue};
 use crate::keys::{Chord, ChordError, KeyMapping, ModeName};
 use crate::settings::{Setting, SettingValue};
 
+pub use crate::rules::WindowRule;
+
 /// A value with the byte range it came from in the rendered document, for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Located<T> {
@@ -365,10 +367,6 @@ pub struct Binding {
     pub span: Option<Range<usize>>,
 }
 
-/// A window rule (filled in by PUI-051).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WindowRule {}
-
 /// A workspace-to-monitor assignment (filled in by PUI-054).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceAssignment {}
@@ -457,7 +455,9 @@ impl ConfigView {
             gaps: Gaps::from_doc(document),
             modes,
             key_mapping,
-            window_rules: Vec::new(),
+            window_rules: crate::rules::read_rules(
+                root.and_then(|root| root.get("on-window-detected")),
+            ),
             workspace_to_monitor: Vec::new(),
             keys,
             out_of_scope,

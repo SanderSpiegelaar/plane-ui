@@ -1,0 +1,11 @@
+config-version = 2
+on-window-detected = [
+    # Finder windows
+    { if = 'test %{app-bundle-id} = com.apple.finder && test %{window-title} ~= "Open dialog"', run = 'layout floating' },
+    # All windows
+    { if = 'true', run = ['layout tiling'] },
+    # Explicit fallthrough
+    { check-further-callbacks = true, run = [] },
+    # Preserve the expression
+    { if = 'test-not %{app-name} ~= Terminal || false', run = 'layout floating' },
+]
