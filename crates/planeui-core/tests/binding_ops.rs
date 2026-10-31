@@ -7,12 +7,99 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use planeui_core::bindings::{BindingEditError, duplicate_binding, remove_binding, upsert_binding};
+use planeui_core::bindings::{
+    add_mode, duplicate_binding, remove_binding, remove_mode, upsert_binding, BindingEditError,
+    RemoveModeError,
+};
 use planeui_core::commands::{Command, ParsedScript, Script, ScriptShape};
 use planeui_core::config_doc::{ConfigDoc, KeyPath};
-use planeui_core::keys::{Chord, KeyMapping};
+use planeui_core::keys::{Chord, KeyMapping, ModeName};
 use similar::TextDiff;
 
+#[test]
+fn mode_additions_mirror_each_style_and_reject_duplicates() {
+    for (source, expected) in [
+        (
+            "[mode.main.binding]\n",
+            "[mode.main.binding]\n\n[mode.service.binding]\n",
+        ),
+        (
+            "mode.main.binding.esc = 'close'\n",
+            "mode.main.binding.esc = 'close'\nmode.service.binding = {}\n",
+        ),
+        (
+            "mode = { main = { binding = {} } }\n",
+            "mode = { main = { binding = {} }, service = { binding = {} } }\n",
+        ),
+        (
+            "[mode.main]\nbinding = {}\n",
+            "[mode.main]\nbinding = {}\n\n[mode.service]\nbinding = {}\n",
+        ),
+    ] {
+        let mut doc = ConfigDoc::parse(source).unwrap();
+        let name = ModeName::new("service").unwrap();
+        add_mode(&mut doc, &name).unwrap();
+        assert_eq!(doc.to_string(), expected);
+        round_trip(&doc);
+        assert!(matches!(
+            add_mode(&mut doc, &name),
+            Err(BindingEditError::AlreadyExists(_))
+        ));
+        assert_eq!(doc.to_string(), expected);
+    }
+}
+
+#[test]
+fn mode_removal_keeps_all_other_content_in_each_style() {
+    for (source, expected) in [
+        (
+            "# config\n[mode.main.binding]\nesc='close'\n[mode.service]\nunknown=1\n[mode.service.binding]\nesc='mode main'\n[gaps]\nx=1\n",
+            "# config\n[mode.main.binding]\nesc='close'\n[gaps]\nx=1\n",
+        ),
+        (
+            "mode.main.binding.esc='close'\nmode.service.binding.esc='mode main'\nmode.service.unknown=1\nother = 2 # keep\n",
+            "mode.main.binding.esc='close'\nother = 2 # keep\n",
+        ),
+        (
+            "mode = { main = { binding = {} }, service = { binding = { esc = 'mode main' }, unknown = 1 } } # keep\n",
+            "mode = { main = { binding = {} } } # keep\n",
+        ),
+    ] {
+        let mut doc = ConfigDoc::parse(source).unwrap();
+        remove_mode(&mut doc, &ModeName::new("service").unwrap()).unwrap();
+        assert_eq!(doc.to_string(), expected);
+        round_trip(&doc);
+    }
+}
+
+#[test]
+fn mode_deletion_lists_every_referencing_binding_and_refuses_main() {
+    for script in [
+        "'mode service'",
+        "['close', 'mode service', 'mode service']",
+        "['future-command', 'mode service']",
+    ] {
+        let source = format!(
+            "[mode.main.binding]\nalt-h={script}\nesc='mode service'\n[mode.other.binding]\nalt-j='mode service'\n[mode.service.binding]\n"
+        );
+        let mut doc = ConfigDoc::parse(&source).unwrap();
+        assert_eq!(
+            remove_mode(&mut doc, &ModeName::new("service").unwrap()),
+            Err(RemoveModeError::Blocked {
+                referencing: vec![
+                    ("main".into(), "alt-h".into()),
+                    ("main".into(), "esc".into()),
+                    ("other".into(), "alt-j".into())
+                ]
+            })
+        );
+        assert_eq!(
+            remove_mode(&mut doc, &ModeName::new("main").unwrap()),
+            Err(RemoveModeError::Main)
+        );
+        assert_eq!(doc.to_string(), source);
+    }
+}
 fn chord(raw: &str) -> Chord {
     Chord::parse(raw, &KeyMapping::default()).unwrap()
 }
@@ -260,10 +347,9 @@ fn only_literal_collisions_are_rejected() {
     upsert_binding(&mut doc, "main", None, &chord("alt-shift-h"), &commands()).unwrap();
     for mode in ["main", "service"] {
         for raw in ["shift-alt-h", "alt-shift-h"] {
-            assert!(
-                doc.get(&KeyPath::from(["mode", mode, "binding", raw]))
-                    .is_some()
-            );
+            assert!(doc
+                .get(&KeyPath::from(["mode", mode, "binding", raw]))
+                .is_some());
         }
     }
     round_trip(&doc);

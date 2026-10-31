@@ -38,6 +38,8 @@ pub enum IssueKind {
     UnknownMode,
     /// An explicit mode table does not define `main`.
     MissingMainMode,
+    /// A non-main mode has no binding that switches back to main.
+    NoWayBack,
     /// A binding intercepts a common macOS shortcut.
     MacOsShortcut,
 }
@@ -92,6 +94,7 @@ pub const RULES: &[Rule] = &[
     duplicate_chords,
     mode_references,
     main_mode,
+    no_way_back,
     macos_shortcuts,
 ];
 
@@ -267,6 +270,24 @@ fn main_mode(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<Validatio
 }
 
 const MACOS_SHORTCUTS: &[&str] = &["cmd-tab", "cmd-space", "cmd-h", "cmd-q"];
+
+fn no_way_back(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    for mode in &view.modes {
+        if mode.name.value != "main"
+            && !mode.bindings.iter().any(|binding| {
+                crate::bindings::binding_switches_to(document, &mode.name.value, binding, "main")
+            })
+        {
+            issues.push(ValidationIssue {
+                key_path: Some(KeyPath::from(["mode", mode.name.value.as_str()])),
+                span: mode.name.span.clone(),
+                severity: Severity::Warning,
+                kind: IssueKind::NoWayBack,
+                message: format!("mode {} has no binding back to main", mode.name.value),
+            });
+        }
+    }
+}
 
 fn macos_shortcuts(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
     for mode in &view.modes {
@@ -553,8 +574,9 @@ mod tests {
         ];
         for (text, kind, message, path) in cases {
             let (_, _, report) = validate_text(text).unwrap();
-            assert_eq!(report.issues.len(), 1, "{text}: {report:?}");
-            let issue = report.issues.first().unwrap();
+            let errors = report.errors().collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{text}: {report:?}");
+            let issue = errors.first().unwrap();
             assert_eq!(issue.severity, Severity::Error, "{text}");
             assert_eq!(issue.kind, kind, "{text}");
             assert_eq!(issue.message, message, "{text}");
@@ -649,6 +671,29 @@ mod tests {
         ] {
             let (_, _, report) = validate_text(text).unwrap();
             assert!(report.issues.is_empty(), "{text}: {report:?}");
+        }
+    }
+
+    #[test]
+    fn non_main_modes_without_a_return_binding_warn_but_allow_writes() {
+        for (script, warns) in [
+            ("", true),
+            ("esc='close'\n", true),
+            ("esc='mode main'\n", false),
+            ("esc=['close', 'mode main']\n", false),
+            ("esc=['future-command', 'mode main']\n", false),
+        ] {
+            let source = format!("[mode.main.binding]\n[mode.service.binding]\n{script}");
+            let (_, _, report) = validate_text(&source).unwrap();
+            assert!(!report.blocks_write());
+            assert_eq!(report.issues.len(), usize::from(warns));
+            if warns {
+                let issue = report.issues.first().unwrap();
+                assert_eq!(issue.kind, IssueKind::NoWayBack);
+                assert_eq!(issue.severity, Severity::Warning);
+                assert_eq!(issue.message, "mode service has no binding back to main");
+                assert_eq!(issue.key_path, Some(KeyPath::from(["mode", "service"])));
+            }
         }
     }
 

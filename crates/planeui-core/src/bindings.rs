@@ -2,8 +2,103 @@
 
 use crate::commands::{Command, ParsedScript, Script, ScriptShape, format_script};
 use crate::config_doc::{ConfigDoc, EditError, KeyPath};
-use crate::config_view::ConfigView;
-use crate::keys::{Chord, ChordStyle};
+use crate::config_view::{Binding, ConfigView};
+use crate::keys::{Chord, ChordStyle, ModeName};
+
+/// Why a mode cannot be removed. Errors leave the document unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RemoveModeError {
+    /// The required main mode cannot be removed.
+    #[error("main cannot be deleted")]
+    Main,
+    /// Bindings still switch to the requested mode.
+    #[error("mode is referenced by {referencing:?}")]
+    Blocked {
+        /// Every referencing binding, in file order, as (mode, raw key).
+        referencing: Vec<(String, String)>,
+    },
+    /// The document could not be edited losslessly.
+    #[error(transparent)]
+    Edit(#[from] EditError),
+}
+
+/// Creates an empty binding table in the existing modes' TOML style.
+///
+/// # Errors
+///
+/// Refuses existing modes or a document that cannot be edited losslessly.
+pub fn add_mode(doc: &mut ConfigDoc, name: &ModeName) -> Result<(), BindingEditError> {
+    let path = KeyPath::from(["mode", name.as_str()]);
+    if doc.get(&path).is_some() {
+        return Err(BindingEditError::AlreadyExists(path));
+    }
+    let mut edited = doc.clone();
+    prepare_binding_table(&mut edited, name.as_str())?;
+    let binding = path.join("binding");
+    if edited.get(&binding).is_none() {
+        edited.insert_empty_table(&binding)?;
+    }
+    *doc = edited;
+    Ok(())
+}
+
+/// Removes a mode and all its tables, unless it is main or any binding switches to it.
+///
+/// Read-only arrays are checked command by command. Compound shell strings and unknown
+/// command syntax are not interpreted, so references hidden inside them cannot be detected.
+///
+/// # Errors
+///
+/// Returns all referencing bindings, the main-mode guard, or a lossless edit error.
+pub fn remove_mode(doc: &mut ConfigDoc, name: &ModeName) -> Result<(), RemoveModeError> {
+    if name.as_str() == "main" {
+        return Err(RemoveModeError::Main);
+    }
+    let view = ConfigView::from_doc(doc);
+    let referencing = view
+        .modes
+        .iter()
+        .flat_map(|mode| {
+            mode.bindings
+                .iter()
+                .filter(|binding| {
+                    binding_switches_to(doc, &mode.name.value, binding, name.as_str())
+                })
+                .map(|binding| (mode.name.value.clone(), binding.raw_key.clone()))
+        })
+        .collect::<Vec<_>>();
+    if !referencing.is_empty() {
+        return Err(RemoveModeError::Blocked { referencing });
+    }
+    doc.remove(&KeyPath::from(["mode", name.as_str()]))?;
+    Ok(())
+}
+
+pub(crate) fn binding_switches_to(
+    doc: &ConfigDoc,
+    mode: &str,
+    binding: &Binding,
+    target: &str,
+) -> bool {
+    let switches =
+        |command: &Command| matches!(command, Command::Mode(name) if name.as_str() == target);
+    match &binding.script {
+        ParsedScript::Editable { commands, .. } => commands.iter().any(switches),
+        ParsedScript::ReadOnly { .. } => {
+            let Some(item) = doc.get(&binding_path(mode, &binding.raw_key)) else {
+                return false;
+            };
+            let parses = |text: &str| Command::parse(text).is_ok_and(|command| switches(&command));
+            item.as_str().is_some_and(parses)
+                || item.as_array().is_some_and(|array| {
+                    array
+                        .iter()
+                        .filter_map(toml_edit::Value::as_str)
+                        .any(parses)
+                })
+        }
+    }
+}
 
 /// Why a binding operation could not be applied. Errors leave the document unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

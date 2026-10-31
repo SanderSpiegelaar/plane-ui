@@ -119,6 +119,25 @@ impl ConfigDoc {
         }
     }
 
+    /// Inserts an empty table, using an inline value for dotted or inline parents.
+    ///
+    /// # Errors
+    ///
+    /// Refuses existing paths and parents that are not tables.
+    pub fn insert_empty_table(&mut self, path: &KeyPath) -> Result<(), EditError> {
+        if self.get(path).is_some() {
+            return Err(EditError::AlreadyExists(path.clone()));
+        }
+        self.set_value(path, Value::InlineTable(InlineTable::new()))?;
+        let (leaf, parents) = path.split_last()?;
+        if let Some(parent) = table_mut(self.document.as_table_mut(), parents)
+            && !parent.is_dotted()
+        {
+            parent.insert(leaf, Item::Table(Table::new()));
+        }
+        Ok(())
+    }
+
     /// Renames a key without moving its item or changing its surrounding decor.
     ///
     /// # Errors
