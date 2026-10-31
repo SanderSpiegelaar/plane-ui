@@ -1,0 +1,94 @@
+---
+source: crates/planeui-core/src/config_view.rs
+expression: bindings_summary(&source)
+---
+mode "main" editable=true
+  alt-slash [alt-slash] editable String: layout tiles horizontal vertical
+  alt-comma [alt-comma] editable String: layout accordion horizontal vertical
+  alt-h [alt-h] editable String: focus left
+  alt-j [alt-j] editable String: focus down
+  alt-k [alt-k] editable String: focus up
+  alt-l [alt-l] editable String: focus right
+  alt-shift-h [alt-shift-h] editable String: move left
+  alt-shift-j [alt-shift-j] editable String: move down
+  alt-shift-k [alt-shift-k] editable String: move up
+  alt-shift-l [alt-shift-l] editable String: move right
+  alt-minus [alt-minus] editable String: resize smart -50
+  alt-equal [alt-equal] editable String: resize smart +50
+  alt-1 [alt-1] editable String: workspace 1
+  alt-2 [alt-2] editable String: workspace 2
+  alt-3 [alt-3] editable String: workspace 3
+  alt-4 [alt-4] editable String: workspace 4
+  alt-5 [alt-5] editable String: workspace 5
+  alt-6 [alt-6] editable String: workspace 6
+  alt-7 [alt-7] editable String: workspace 7
+  alt-8 [alt-8] editable String: workspace 8
+  alt-9 [alt-9] editable String: workspace 9
+  alt-a [alt-a] editable String: workspace A
+    # In your config, you can drop workspace bindings that you don't need
+  alt-b [alt-b] editable String: workspace B
+  alt-c [alt-c] editable String: workspace C
+  alt-d [alt-d] editable String: workspace D
+  alt-e [alt-e] editable String: workspace E
+  alt-f [alt-f] editable String: workspace F
+  alt-g [alt-g] editable String: workspace G
+  alt-i [alt-i] editable String: workspace I
+  alt-m [alt-m] editable String: workspace M
+  alt-n [alt-n] editable String: workspace N
+  alt-o [alt-o] editable String: workspace O
+  alt-p [alt-p] editable String: workspace P
+  alt-q [alt-q] editable String: workspace Q
+  alt-r [alt-r] editable String: workspace R
+  alt-s [alt-s] editable String: workspace S
+  alt-t [alt-t] editable String: workspace T
+  alt-u [alt-u] editable String: workspace U
+  alt-v [alt-v] editable String: workspace V
+  alt-w [alt-w] editable String: workspace W
+  alt-x [alt-x] editable String: workspace X
+  alt-y [alt-y] editable String: workspace Y
+  alt-z [alt-z] editable String: workspace Z
+  alt-shift-1 [alt-shift-1] editable String: move-node-to-workspace 1
+  alt-shift-2 [alt-shift-2] editable String: move-node-to-workspace 2
+  alt-shift-3 [alt-shift-3] editable String: move-node-to-workspace 3
+  alt-shift-4 [alt-shift-4] editable String: move-node-to-workspace 4
+  alt-shift-5 [alt-shift-5] editable String: move-node-to-workspace 5
+  alt-shift-6 [alt-shift-6] editable String: move-node-to-workspace 6
+  alt-shift-7 [alt-shift-7] editable String: move-node-to-workspace 7
+  alt-shift-8 [alt-shift-8] editable String: move-node-to-workspace 8
+  alt-shift-9 [alt-shift-9] editable String: move-node-to-workspace 9
+  alt-shift-a [alt-shift-a] editable String: move-node-to-workspace A
+  alt-shift-b [alt-shift-b] editable String: move-node-to-workspace B
+  alt-shift-c [alt-shift-c] editable String: move-node-to-workspace C
+  alt-shift-d [alt-shift-d] editable String: move-node-to-workspace D
+  alt-shift-e [alt-shift-e] editable String: move-node-to-workspace E
+  alt-shift-f [alt-shift-f] editable String: move-node-to-workspace F
+  alt-shift-g [alt-shift-g] editable String: move-node-to-workspace G
+  alt-shift-i [alt-shift-i] editable String: move-node-to-workspace I
+  alt-shift-m [alt-shift-m] editable String: move-node-to-workspace M
+  alt-shift-n [alt-shift-n] editable String: move-node-to-workspace N
+  alt-shift-o [alt-shift-o] editable String: move-node-to-workspace O
+  alt-shift-p [alt-shift-p] editable String: move-node-to-workspace P
+  alt-shift-q [alt-shift-q] editable String: move-node-to-workspace Q
+  alt-shift-r [alt-shift-r] editable String: move-node-to-workspace R
+  alt-shift-s [alt-shift-s] editable String: move-node-to-workspace S
+  alt-shift-t [alt-shift-t] editable String: move-node-to-workspace T
+  alt-shift-u [alt-shift-u] editable String: move-node-to-workspace U
+  alt-shift-v [alt-shift-v] editable String: move-node-to-workspace V
+  alt-shift-w [alt-shift-w] editable String: move-node-to-workspace W
+  alt-shift-x [alt-shift-x] editable String: move-node-to-workspace X
+  alt-shift-y [alt-shift-y] editable String: move-node-to-workspace Y
+  alt-shift-z [alt-shift-z] editable String: move-node-to-workspace Z
+  alt-tab [alt-tab] editable String: workspace-back-and-forth
+  alt-shift-tab [alt-shift-tab] editable String: move-workspace-to-monitor --wrap-around next
+  alt-shift-semicolon [alt-shift-semicolon] editable String: mode service
+mode "service" editable=true
+  esc [esc] editable Array: reload-config -> mode main
+  r [r] editable Array: flatten-workspace-tree -> mode main
+    # reset layout
+  f [f] editable Array: layout floating tiling -> mode main
+    # Toggle between floating and tiling layout
+  backspace [backspace] editable Array: close-all-windows-but-current -> mode main
+  alt-shift-h [alt-shift-h] editable Array: join-with left -> mode main
+  alt-shift-j [alt-shift-j] editable Array: join-with down -> mode main
+  alt-shift-k [alt-shift-k] editable Array: join-with up -> mode main
+  alt-shift-l [alt-shift-l] editable Array: join-with right -> mode main

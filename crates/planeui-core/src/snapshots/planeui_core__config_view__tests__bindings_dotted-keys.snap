@@ -1,0 +1,9 @@
+---
+source: crates/planeui-core/src/config_view.rs
+expression: bindings_summary(&source)
+---
+mode "main" editable=true
+  alt-h [alt-h] editable String: focus left
+  alt-l [alt-l] editable String: focus right
+mode "service" editable=true
+  esc [esc] editable Array: reload-config -> mode main

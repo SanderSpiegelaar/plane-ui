@@ -6,7 +6,9 @@ use std::ops::Range;
 
 use toml_edit::{Document, Item, Value};
 
+use crate::commands::{ParsedScript, Script};
 use crate::config_doc::{ConfigDoc, KeyPath};
+use crate::keys::{Chord, ChordError, KeyMapping, ModeName};
 
 /// A value with the byte range it came from in the rendered document, for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,11 +289,31 @@ pub struct General {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Gaps {}
 
-/// A binding mode (filled in by PUI-032).
+/// A binding mode, including malformed modes that must remain visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mode {
-    /// The mode's name, e.g. `main`.
+    /// The original name, including empty TOML keys that `ModeName` cannot represent.
     pub name: Located<String>,
+    /// Bindings in file order, even when a nested binding makes the mode read-only.
+    pub bindings: Vec<Binding>,
+    /// False for an invalid name, a non-table mode or `binding`, or nested binding tables.
+    /// Missing `binding` is editable and empty. Invalid scalar scripts affect only their row.
+    pub editable: bool,
+}
+
+/// A binding as written, with independently parsed chord and script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    /// Original key notation, without TOML quoting.
+    pub raw_key: String,
+    /// Parsed with the view's key mapping, or the error to display inline.
+    pub chord: Result<Chord, ChordError>,
+    /// Structured commands, or the reason the original script must remain read-only.
+    pub script: ParsedScript,
+    /// Trimmed trailing value comment, including its leading `#` as shown to users.
+    pub inline_comment: Option<String>,
+    /// Byte range of the binding's value, when known.
+    pub span: Option<Range<usize>>,
 }
 
 /// A window rule (filled in by PUI-051).
@@ -309,8 +331,10 @@ pub struct ConfigView {
     pub general: General,
     /// Gaps.
     pub gaps: Gaps,
-    /// Binding modes in file order.
+    /// Binding modes with `main` first, then the remaining modes in file order.
     pub modes: Vec<Mode>,
+    /// The mapping shared by chord parsing, validation, and the UI.
+    pub key_mapping: KeyMapping,
     /// Window rules in file order.
     pub window_rules: Vec<WindowRule>,
     /// Workspace-to-monitor assignments in file order.
@@ -337,21 +361,21 @@ impl ConfigView {
             auto_reload_config: typed(field("auto-reload-config"), Item::as_bool),
         };
 
-        let modes = document
+        let key_mapping = KeyMapping::from_doc(document);
+        let mut modes: Vec<Mode> = document
             .get(&KeyPath::from(["mode"]))
             .and_then(Item::as_table_like)
             .map(|modes| {
                 modes
                     .iter()
-                    .map(|(name, _)| Mode {
-                        name: Located {
-                            value: name.to_owned(),
-                            span: root.and_then(|root| key_span(root, &["mode", name])),
-                        },
-                    })
+                    .map(|(name, item)| read_mode(name, item, root, &key_mapping))
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(index) = modes.iter().position(|mode| mode.name.value == "main") {
+            let main = modes.remove(index);
+            modes.insert(0, main);
+        }
 
         let keys = catalogued_keys(document, root);
         let out_of_scope = keys
@@ -364,11 +388,55 @@ impl ConfigView {
             general,
             gaps: Gaps::default(),
             modes,
+            key_mapping,
             window_rules: Vec::new(),
             workspace_to_monitor: Vec::new(),
             keys,
             out_of_scope,
         }
+    }
+}
+
+fn read_mode(name: &str, item: &Item, root: Option<&Item>, mapping: &KeyMapping) -> Mode {
+    let table = item.as_table_like();
+    let binding_item = table.and_then(|table| table.get("binding"));
+    let binding_table = binding_item.and_then(Item::as_table_like);
+    let editable = ModeName::new(name).is_ok()
+        && table.is_some()
+        && binding_item.is_none_or(Item::is_table_like)
+        && binding_table.is_none_or(|table| {
+            table
+                .iter()
+                .all(|(_, item)| !item.is_table_like() && !item.is_array_of_tables())
+        });
+    let bindings = binding_table
+        .map(|table| {
+            table
+                .iter()
+                .map(|(raw_key, item)| Binding {
+                    raw_key: raw_key.to_owned(),
+                    chord: Chord::parse(raw_key, mapping),
+                    script: Script::parse(item),
+                    inline_comment: item
+                        .as_value()
+                        .and_then(|value| value.decor().suffix())
+                        .and_then(toml_edit::RawString::as_str)
+                        .map(str::trim)
+                        .filter(|suffix| suffix.starts_with('#'))
+                        .map(str::to_owned),
+                    span: root
+                        .and_then(|root| value_span(root, &["mode", name, "binding", raw_key])),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Mode {
+        name: Located {
+            value: name.to_owned(),
+            span: root.and_then(|root| key_span(root, &["mode", name])),
+        },
+        bindings,
+        editable,
     }
 }
 
@@ -430,6 +498,7 @@ fn value_span(root: &Item, path: &[&str]) -> Option<Range<usize>> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
     use std::fs;
     use std::path::Path;
 
@@ -508,5 +577,130 @@ mod tests {
             .map(|mode| mode.name.value.as_str())
             .collect();
         assert_eq!(names, ["main", "service"]);
+    }
+
+    fn bindings_summary(source: &str) -> String {
+        let view = view(source);
+        let mut summary = String::new();
+        for mode in view.modes {
+            writeln!(
+                summary,
+                "mode {:?} editable={}",
+                mode.name.value, mode.editable
+            )
+            .unwrap();
+            for binding in mode.bindings {
+                let chord = match binding.chord {
+                    Ok(chord) => chord.normalized().to_string(),
+                    Err(error) => format!("error: {error}"),
+                };
+                let script = match binding.script {
+                    ParsedScript::Editable { commands, shape } => format!(
+                        "editable {shape:?}: {}",
+                        commands
+                            .iter()
+                            .map(crate::commands::Command::format)
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    ),
+                    ParsedScript::ReadOnly { reason } => format!("read-only: {reason}"),
+                };
+                writeln!(summary, "  {} [{chord}] {script}", binding.raw_key).unwrap();
+                if let Some(comment) = binding.inline_comment {
+                    writeln!(summary, "    {comment}").unwrap();
+                }
+                assert!(binding.span.is_some());
+            }
+        }
+        summary
+    }
+
+    #[test]
+    fn bindings_views() {
+        for name in [
+            "aerospace-default",
+            "sander",
+            "dotted-keys",
+            "inline-tables",
+        ] {
+            let source = fixture(&format!("{name}.toml"));
+            insta::assert_snapshot!(format!("bindings_{name}"), bindings_summary(&source));
+        }
+    }
+
+    #[test]
+    fn main_is_first_and_comments_and_spans_are_preserved() {
+        let source = "[mode.service.binding]\nesc = 'mode main'\n\
+            [mode.other]\n\
+            [mode.main]\nbinding.alt-h = 'focus left'  # Go left  \n";
+        let view = view(source);
+        let names: Vec<_> = view
+            .modes
+            .iter()
+            .map(|mode| mode.name.value.as_str())
+            .collect();
+        assert_eq!(names, ["main", "service", "other"]);
+        let main = view.modes.first().unwrap();
+        assert!(main.editable);
+        assert_eq!(&source[main.name.span.clone().unwrap()], "main");
+        let binding = main.bindings.first().unwrap();
+        assert_eq!(binding.inline_comment.as_deref(), Some("# Go left"));
+        assert_eq!(&source[binding.span.clone().unwrap()], "'focus left'");
+        assert_eq!(view.modes.last().unwrap().bindings, []);
+    }
+
+    #[test]
+    fn unsafe_mode_shapes_are_read_only_without_hiding_rows() {
+        for source in [
+            "mode.main = false",
+            "mode.main.binding = 42",
+            "[mode.main.binding]\nalt-h = 'focus left'\nalt-l.command = 'focus right'",
+            "mode.main.binding = { alt-h = 'focus left', alt-l = { command = 'focus right' } }",
+            "[[mode.main.binding.alt-h]]\ncommand = 'focus left'",
+            "[mode.'']\n",
+        ] {
+            let view = view(source);
+            let mode = view.modes.first().unwrap();
+            assert!(!mode.editable, "{source}");
+            if source.contains("alt-l") {
+                assert_eq!(mode.bindings.len(), 2);
+                assert!(matches!(
+                    mode.bindings.first().unwrap().script,
+                    ParsedScript::Editable { .. }
+                ));
+                assert!(matches!(
+                    mode.bindings.last().unwrap().script,
+                    ParsedScript::ReadOnly { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_rows_do_not_make_other_bindings_read_only() {
+        let view = view("[mode.main.binding]\nalt-unknown = 42\nalt-h = 'focus left'\n");
+        let mode = view.modes.first().unwrap();
+        assert!(mode.editable);
+        let invalid = mode.bindings.first().unwrap();
+        assert!(invalid.chord.is_err());
+        assert!(matches!(invalid.script, ParsedScript::ReadOnly { .. }));
+        assert!(mode.bindings.last().unwrap().chord.is_ok());
+    }
+
+    #[test]
+    fn chords_use_the_mapping_kept_on_the_view() {
+        let view = view(
+            "key-mapping.key-notation-to-key-code.homeKey = 'h'\n\
+            [mode.main.binding]\nalt-homeKey = 'focus left'\n",
+        );
+        let binding = view.modes.first().unwrap().bindings.first().unwrap();
+        assert_eq!(
+            binding.chord,
+            Chord::parse("alt-homeKey", &view.key_mapping)
+        );
+        assert_eq!(
+            binding.chord.as_ref().unwrap().normalized().to_string(),
+            "alt-h"
+        );
     }
 }

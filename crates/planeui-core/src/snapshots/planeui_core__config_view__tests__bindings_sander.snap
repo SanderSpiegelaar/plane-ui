@@ -1,0 +1,37 @@
+---
+source: crates/planeui-core/src/config_view.rs
+expression: bindings_summary(&source)
+---
+mode "main" editable=true
+  alt-slash [alt-slash] editable String: layout tiles horizontal vertical
+  alt-comma [alt-comma] editable String: layout accordion horizontal vertical
+  alt-left [alt-left] editable String: focus left
+  alt-down [alt-down] editable String: focus down
+  alt-up [alt-up] editable String: focus up
+  alt-right [alt-right] editable String: focus right
+  alt-shift-left [alt-shift-left] editable String: move left
+  alt-shift-down [alt-shift-down] editable String: move down
+  alt-shift-up [alt-shift-up] editable String: move up
+  alt-shift-right [alt-shift-right] editable String: move right
+  alt-minus [alt-minus] editable String: resize smart -50
+  alt-equal [alt-equal] editable String: resize smart +50
+  alt-1 [alt-1] editable String: workspace 1
+  alt-2 [alt-2] editable String: workspace 2
+  alt-3 [alt-3] editable String: workspace 3
+  alt-4 [alt-4] editable String: workspace 4
+  alt-5 [alt-5] editable String: workspace 5
+  alt-6 [alt-6] editable String: workspace 6
+  alt-7 [alt-7] editable String: workspace 7
+  alt-8 [alt-8] editable String: workspace 8
+  alt-9 [alt-9] editable String: workspace 9
+  alt-shift-1 [alt-shift-1] editable String: move-node-to-workspace 1
+  alt-shift-2 [alt-shift-2] editable String: move-node-to-workspace 2
+  alt-shift-3 [alt-shift-3] editable String: move-node-to-workspace 3
+  alt-shift-4 [alt-shift-4] editable String: move-node-to-workspace 4
+  alt-shift-5 [alt-shift-5] editable String: move-node-to-workspace 5
+  alt-shift-6 [alt-shift-6] editable String: move-node-to-workspace 6
+  alt-shift-7 [alt-shift-7] editable String: move-node-to-workspace 7
+  alt-shift-8 [alt-shift-8] editable String: move-node-to-workspace 8
+  alt-shift-9 [alt-shift-9] editable String: move-node-to-workspace 9
+  ctrl-alt-comma [alt-ctrl-comma] editable String: focus-monitor prev
+  ctrl-alt-period [alt-ctrl-period] editable String: focus-monitor next
