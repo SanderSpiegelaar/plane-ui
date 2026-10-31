@@ -3,6 +3,7 @@
 pub mod config_model;
 pub mod debug_control;
 pub mod fields;
+pub mod shell;
 pub mod startup;
 #[cfg(test)]
 mod test_support;
@@ -14,9 +15,10 @@ use gpui_kit::{
     size,
 };
 
+use crate::shell::SECTIONS_CONTEXT;
 use crate::startup::{MainWindow, load_session};
 
-actions!(planeui, [Quit, Undo, Redo]);
+actions!(planeui, [Quit, Undo, Redo, PreviousSection, NextSection]);
 
 /// Starts the application and opens the main window.
 pub fn run() {
@@ -38,6 +40,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-z", Undo, None),
         KeyBinding::new("cmd-shift-z", Redo, None),
+        KeyBinding::new("up", PreviousSection, Some(SECTIONS_CONTEXT)),
+        KeyBinding::new("down", NextSection, Some(SECTIONS_CONTEXT)),
     ]);
 }
 

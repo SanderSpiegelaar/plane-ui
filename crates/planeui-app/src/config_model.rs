@@ -132,6 +132,7 @@ pub struct ConfigModel {
     aerospace: AerospaceInfo,
     queue: WriteQueue,
     aerospace_check: Option<Task<()>>,
+    disk_check: Option<Task<()>>,
 }
 
 impl EventEmitter<ConfigEvent> for ConfigModel {}
@@ -163,6 +164,7 @@ impl ConfigModel {
             aerospace: AerospaceInfo::default(),
             queue: WriteQueue::Idle,
             aerospace_check: None,
+            disk_check: None,
         })
     }
 
@@ -281,6 +283,37 @@ impl ConfigModel {
                 .ok();
             log_if_released(this.update(cx, |this, cx| {
                 this.aerospace = AerospaceInfo { version, state };
+                cx.notify();
+            }));
+        }));
+    }
+
+    /// Reloads the document if the file changed outside PlaneUI, checking in the background.
+    /// Skipped while a write is in flight: that write checks the disk itself, and a half-done
+    /// write would look like an external edit.
+    pub fn check_disk(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.queue, WriteQueue::Busy { .. }) {
+            return;
+        }
+        let store = self.context.store.clone();
+        let expected = self.stamp.clone();
+        self.disk_check = Some(cx.spawn(async move |this, cx| {
+            let current = cx.background_spawn(async move { store.load() }).await;
+            log_if_released(this.update(cx, |this, cx| {
+                // A write that started or finished meanwhile owns the stamp now.
+                if matches!(this.queue, WriteQueue::Busy { .. }) || this.stamp != expected {
+                    return;
+                }
+                match current {
+                    Ok(current) if current.stamp != expected => {
+                        this.reload_from_disk(current, None, cx);
+                    }
+                    Ok(_) => return,
+                    Err(error) => {
+                        this.last_result =
+                            SaveStatus::Error(format!("Could not read the config: {error}"));
+                    }
+                }
                 cx.notify();
             }));
         }));
@@ -532,6 +565,25 @@ mod tests {
             fixture.disk(),
             "accordion-padding = 5\n",
             "the next change builds on the external edit"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_disk_check_during_a_write_is_not_an_external_change(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let model = fixture.model(cx);
+        let events = events(cx, &model);
+
+        set_padding(&model, 1, cx);
+        model.update(cx, ConfigModel::check_disk);
+        cx.run_until_parked();
+        model.update(cx, ConfigModel::check_disk);
+        cx.run_until_parked();
+
+        assert_eq!(*events.borrow(), Vec::new());
+        assert_eq!(
+            fixture.disk(),
+            "# Gaps between windows\naccordion-padding = 1 # px\n"
         );
     }
 

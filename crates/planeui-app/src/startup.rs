@@ -8,16 +8,15 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div,
+    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, Task, Window, div,
 };
 use planeui_core::aerospace::{Aerospace, AerospaceVersion, CliAerospace, CliError, ReloadOutcome};
 use planeui_core::apply::ApplyContext;
 use planeui_core::store::{ConfigStore, Loaded, PathEnv, SnapshotStore, resolve_config_path};
 
 use crate::config_model::ConfigModel;
-use crate::debug_control::AccordionPaddingControl;
-use crate::{Redo, Undo};
+use crate::shell::Shell;
 
 /// Everything the editor starts from.
 #[derive(Debug)]
@@ -89,17 +88,13 @@ impl Aerospace for MissingAerospace {
 enum Screen {
     Loading,
     Failed(SharedString),
-    Ready {
-        model: Entity<ConfigModel>,
-        control: Entity<AccordionPaddingControl>,
-    },
+    Ready(Entity<Shell>),
 }
 
 /// The main window's root view.
 #[derive(Debug)]
 pub struct MainWindow {
     screen: Screen,
-    focus_handle: FocusHandle,
     _load: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -115,10 +110,6 @@ impl MainWindow {
         let appearance = window.observe_window_appearance(|window, cx| {
             Theme::sync_system_appearance(Some(window), cx);
         });
-        // Undo and Redo dispatch from the focused element, so the root takes focus until a
-        // control does.
-        let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle, cx);
         let load = cx.spawn_in(window, async move |this, cx| {
             let session = cx.background_spawn(async move { load() }).await;
             if let Err(error) =
@@ -129,7 +120,6 @@ impl MainWindow {
         });
         Self {
             screen: Screen::Loading,
-            focus_handle,
             _load: load,
             _subscriptions: vec![appearance],
         }
@@ -148,8 +138,7 @@ impl MainWindow {
             Ok(model) => {
                 let model = cx.new(|_| model);
                 model.update(cx, ConfigModel::refresh_aerospace);
-                let control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
-                Screen::Ready { model, control }
+                Screen::Ready(cx.new(|cx| Shell::new(model, window, cx)))
             }
             Err(error) => {
                 log::error!("{error:#}");
@@ -158,22 +147,13 @@ impl MainWindow {
         };
         cx.notify();
     }
-
-    fn update_model(
-        &self,
-        cx: &mut Context<Self>,
-        update: impl FnOnce(&mut ConfigModel, &mut Context<ConfigModel>),
-    ) {
-        if let Screen::Ready { model, .. } = &self.screen {
-            model.update(cx, update);
-        }
-    }
 }
 
 impl Render for MainWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let content = match &self.screen {
+        let message = match &self.screen {
+            Screen::Ready(shell) => return div().size_full().child(shell.clone()),
             Screen::Loading => div()
                 .text_color(theme.muted_foreground)
                 .child("Loading the AeroSpace config…"),
@@ -188,22 +168,14 @@ impl Render for MainWindow {
                         .text_color(theme.muted_foreground)
                         .child(message.clone()),
                 ),
-            Screen::Ready { control, .. } => div().child(control.clone()),
         };
         div()
-            .track_focus(&self.focus_handle)
-            .on_action(
-                cx.listener(|this, _: &Undo, _, cx| this.update_model(cx, ConfigModel::undo)),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, _, cx| this.update_model(cx, ConfigModel::redo)),
-            )
             .size_full()
             .flex()
             .items_center()
             .justify_center()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(content)
+            .child(message)
     }
 }

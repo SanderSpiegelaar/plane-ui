@@ -1,0 +1,505 @@
+//! The permanent window layout: section sidebar, content pane, reload-error banner, status bar
+//! and toasts.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
+use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, TestSupportExt as _, Window, div,
+};
+
+use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigModel, SaveStatus};
+use crate::debug_control::AccordionPaddingControl;
+use crate::{NextSection, PreviousSection, Redo, Undo};
+
+/// The key context in which the arrow keys move between sections.
+pub const SECTIONS_CONTEXT: &str = "Sections";
+
+/// A sidebar entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    /// Keybindings per mode.
+    Keybindings,
+    /// Inner and outer gaps.
+    Gaps,
+    /// General settings.
+    General,
+    /// `on-window-detected` rules.
+    WindowRules,
+    /// Workspace-to-monitor assignment.
+    WorkspacesAndMonitors,
+    /// Snapshots taken before each write.
+    Snapshots,
+}
+
+impl Section {
+    /// Every section in sidebar order.
+    pub const ALL: [Self; 6] = [
+        Self::Keybindings,
+        Self::Gaps,
+        Self::General,
+        Self::WindowRules,
+        Self::WorkspacesAndMonitors,
+        Self::Snapshots,
+    ];
+
+    /// The sidebar label.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Keybindings => "Keybindings",
+            Self::Gaps => "Gaps",
+            Self::General => "General",
+            Self::WindowRules => "Window rules",
+            Self::WorkspacesAndMonitors => "Workspaces and monitors",
+            Self::Snapshots => "Snapshots",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|section| *section == self)
+            .unwrap_or_default()
+    }
+
+    fn previous(self) -> Self {
+        let index = self.index().saturating_sub(1);
+        Self::ALL.get(index).copied().unwrap_or(self)
+    }
+
+    fn next(self) -> Self {
+        Self::ALL.get(self.index() + 1).copied().unwrap_or(self)
+    }
+}
+
+/// The main window's content once a config is open.
+#[derive(Debug)]
+pub struct Shell {
+    model: Entity<ConfigModel>,
+    section: Section,
+    padding_control: Entity<AccordionPaddingControl>,
+    focus_handle: FocusHandle,
+    sections_focus: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Shell {
+    /// The editor for `model`, landing on Keybindings.
+    pub fn new(model: Entity<ConfigModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let padding_control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
+        // Undo and Redo dispatch from the focused element, so the shell holds focus until a
+        // control takes it.
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+        let subscriptions = vec![
+            cx.observe(&model, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&model, window, |_, _, event: &ConfigEvent, window, cx| {
+                window.push_notification(notification(event), cx);
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.model.update(cx, ConfigModel::check_disk);
+                }
+            }),
+        ];
+        Self {
+            model,
+            section: Section::Keybindings,
+            padding_control,
+            focus_handle,
+            sections_focus: cx.focus_handle(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// The section shown in the content pane.
+    #[must_use]
+    pub fn section(&self) -> Section {
+        self.section
+    }
+
+    /// Shows `section`.
+    pub fn select(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.section = section;
+        cx.notify();
+    }
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let items = Section::ALL.map(|section| {
+            SidebarMenuItem::new(section.title())
+                .active(section == self.section)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.sections_focus, cx);
+                    this.select(section, cx);
+                }))
+        });
+        div()
+            .id("sections")
+            .role(Role::Tree)
+            .aria_label("Sections")
+            .key_context(SECTIONS_CONTEXT)
+            .track_focus(&self.sections_focus)
+            .on_action(cx.listener(|this, _: &PreviousSection, _, cx| {
+                this.select(this.section.previous(), cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextSection, _, cx| {
+                this.select(this.section.next(), cx);
+            }))
+            .h_full()
+            .child(
+                Sidebar::new("sidebar")
+                    .collapsible(false)
+                    .child(SidebarMenu::new().children(items)),
+            )
+    }
+
+    fn render_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let model = self.model.read(cx);
+        let SaveStatus::ReloadFailed { messages } = model.status() else {
+            return None;
+        };
+        let text = messages
+            .iter()
+            .map(|message| match &message.key_path {
+                Some(key_path) => format!("{key_path}: {}", message.message),
+                None => message.message.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let can_undo = model.undo_label().is_some();
+        Some(
+            h_flex()
+                .id("reload-error")
+                .test_support()
+                .items_start()
+                .gap_3()
+                .p_3()
+                .child(
+                    Alert::error("reload-error-alert", text)
+                        .title("AeroSpace reported errors in the config")
+                        .flex_1(),
+                )
+                .when(can_undo, |this| {
+                    this.child(
+                        Button::new("undo-last-change")
+                            .label("Undo last change")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.update(cx, ConfigModel::undo);
+                            })),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
+    fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let heading = div().text_lg().child(self.section.title());
+        let body = match self.section {
+            Section::General => self.padding_control.clone().into_any_element(),
+            _ => div()
+                .text_color(cx.theme().muted_foreground)
+                .child("This section is not editable yet.")
+                .into_any_element(),
+        };
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .p_6()
+            .gap_4()
+            .child(heading)
+            .child(body)
+    }
+
+    fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = self.model.read(cx);
+        let path: SharedString = model.display_path().display().to_string().into();
+        let aerospace = aerospace_text(model.aerospace());
+        let status = status_text(&model.status());
+        let muted = cx.theme().muted_foreground;
+        StatusBar::new()
+            .left(div().text_color(muted).child(path))
+            .child(
+                div()
+                    .id("aerospace-state")
+                    .role(Role::Status)
+                    .aria_label(aerospace.clone())
+                    .test_support()
+                    .text_color(muted)
+                    .child(aerospace),
+            )
+            .right(
+                div()
+                    .id("save-status")
+                    .role(Role::Status)
+                    .aria_label(status.clone())
+                    .test_support()
+                    .child(status),
+            )
+    }
+}
+
+impl Render for Shell {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let banner = self.render_banner(cx);
+        v_flex()
+            .id("shell")
+            .role(Role::Group)
+            .aria_label("PlaneUI")
+            .track_focus(&self.focus_handle)
+            .on_action(
+                cx.listener(|this, _: &Undo, _, cx| this.model.update(cx, ConfigModel::undo)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Redo, _, cx| this.model.update(cx, ConfigModel::redo)),
+            )
+            .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_start()
+                    .child(self.render_sidebar(cx))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .children(banner)
+                            .child(self.render_content(cx)),
+                    ),
+            )
+            .child(self.render_status_bar(cx))
+    }
+}
+
+fn notification(event: &ConfigEvent) -> Notification {
+    match event {
+        ConfigEvent::ReloadedFromDisk { discarded } => {
+            let message = match discarded {
+                Some(label) => {
+                    format!("The file changed outside PlaneUI, so “{label}” was not saved.")
+                }
+                None => "The file changed outside PlaneUI.".to_owned(),
+            };
+            Notification::info(message).title("Reloaded from disk")
+        }
+    }
+}
+
+/// The status bar's description of the latest change.
+fn status_text(status: &SaveStatus) -> SharedString {
+    match status {
+        SaveStatus::Idle => "No changes yet".into(),
+        SaveStatus::Writing => "Saving…".into(),
+        SaveStatus::Applied { at } => format!("Applied {}", utc_clock(*at)).into(),
+        SaveStatus::ReloadFailed { .. } => "Saved, but AeroSpace reported errors".into(),
+        SaveStatus::NotRunning => "AeroSpace not running: changes apply on next start".into(),
+        SaveStatus::NotInstalled => "AeroSpace not found: changes apply on next start".into(),
+        SaveStatus::Error(message) => message.clone().into(),
+    }
+}
+
+fn aerospace_text(info: &AerospaceInfo) -> SharedString {
+    let name = info.version.as_ref().map_or_else(
+        || "AeroSpace".to_owned(),
+        |version| format!("AeroSpace {version}"),
+    );
+    match info.state {
+        AerospaceState::Unknown => name.into(),
+        AerospaceState::Running => format!("{name}, running").into(),
+        AerospaceState::NotRunning => format!("{name}, not running").into(),
+        AerospaceState::NotInstalled => "AeroSpace not installed".into(),
+    }
+}
+
+/// Std has no time zone database, so the time is shown in UTC and says so.
+fn utc_clock(at: SystemTime) -> String {
+    let seconds = at
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+        % 86_400;
+    format!(
+        "{:02}:{:02}:{:02} UTC",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use gpui_kit::test::{TestAppContextExt as _, TestWindowExt as _};
+    use gpui_kit::{AnyWindowHandle, TestAppContext};
+    use planeui_core::aerospace::{ReloadMessage, ReloadOutcome};
+
+    use super::*;
+    use crate::test_support::{Fixture, in_window, open_window, set_padding};
+
+    const ORIGINAL: &str = "accordion-padding = 30 # px\n";
+
+    fn open_shell(cx: &mut TestAppContext, fixture: &Fixture) -> (AnyWindowHandle, Entity<Shell>) {
+        let model = fixture.model(cx);
+        open_window(cx, |window, cx| Shell::new(model, window, cx))
+    }
+
+    fn model(cx: &mut TestAppContext, shell: &Entity<Shell>) -> Entity<ConfigModel> {
+        shell.read_with(cx, |shell, _| shell.model.clone())
+    }
+
+    fn status_label(cx: &mut TestAppContext, window: AnyWindowHandle, id: &'static str) -> String {
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.find(id).label().unwrap_or_default().to_owned()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_reload_shows_the_banner_and_its_undo_reverts(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        fixture.aerospace.queue_reload(Ok(ReloadOutcome::Failed {
+            errors: vec![ReloadMessage {
+                key_path: Some("accordion-padding".to_owned()),
+                message: "bad value".to_owned(),
+            }],
+            raw: "[ERROR] accordion-padding: bad value".to_owned(),
+        }));
+        let (window, shell) = open_shell(cx, &fixture);
+        set_padding(&model(cx, &shell), 12, cx);
+        cx.run_until_parked();
+
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("reload-error").visible());
+            window.click("undo-last-change", cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(fixture.disk(), ORIGINAL);
+        assert_eq!(fixture.aerospace.reload_count(), 2);
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("reload-error").is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn the_status_bar_reflects_the_latest_apply(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        let model = model(cx, &shell);
+        model.update(cx, ConfigModel::refresh_aerospace);
+        cx.run_until_parked();
+        assert_eq!(
+            status_label(cx, window, "aerospace-state"),
+            "AeroSpace 0.21.3-Beta, not running"
+        );
+        assert_eq!(status_label(cx, window, "save-status"), "No changes yet");
+
+        set_padding(&model, 1, cx);
+        assert_eq!(status_label(cx, window, "save-status"), "Saving…");
+        cx.run_until_parked();
+        let applied = status_label(cx, window, "save-status");
+        assert!(
+            applied.starts_with("Applied ") && applied.ends_with(" UTC"),
+            "{applied}"
+        );
+        assert_eq!(
+            status_label(cx, window, "aerospace-state"),
+            "AeroSpace 0.21.3-Beta, running"
+        );
+
+        fixture
+            .aerospace
+            .queue_reload(Ok(ReloadOutcome::NotRunning));
+        set_padding(&model, 2, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            status_label(cx, window, "save-status"),
+            "AeroSpace not running: changes apply on next start"
+        );
+
+        fixture.aerospace.queue_reload(Ok(ReloadOutcome::Failed {
+            errors: Vec::new(),
+            raw: String::new(),
+        }));
+        set_padding(&model, 3, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            status_label(cx, window, "save-status"),
+            "Saved, but AeroSpace reported errors"
+        );
+    }
+
+    #[gpui_kit::test]
+    async fn activating_the_window_reloads_an_external_edit(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        let external = "accordion-padding = 99\n";
+        fixture.write_disk(external);
+
+        cx.add_empty_window()
+            .update(|other, _| other.activate_window());
+        cx.run_until_parked();
+        in_window(cx, window, |window, _| window.activate_window());
+        cx.run_until_parked();
+
+        let shown = model(cx, &shell).read_with(cx, |model, _| model.doc().to_string());
+        assert_eq!(shown, external);
+        cx.wait_for(window, Duration::from_secs(1), |window, _| {
+            window.try_find("notification").is_some()
+        })
+        .await;
+        assert_eq!(fixture.disk(), external, "reloading never writes");
+    }
+
+    #[gpui_kit::test]
+    fn arrow_keys_move_between_sections(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        let sections = shell.read_with(cx, |shell, _| shell.sections_focus.clone());
+        in_window(cx, window, |window, cx| {
+            window.focus(&sections, cx);
+            window.press("down", cx);
+            window.press("down", cx);
+        });
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.section()),
+            Section::General
+        );
+        in_window(cx, window, |window, cx| window.press("up", cx));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.section()),
+            Section::Gaps
+        );
+    }
+
+    #[gpui_kit::test]
+    fn cmd_z_undoes_and_cmd_shift_z_redoes(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        set_padding(&model(cx, &shell), 12, cx);
+        cx.run_until_parked();
+        let edited = fixture.disk();
+
+        in_window(cx, window, |window, cx| window.press("cmd-z", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
+
+        in_window(cx, window, |window, cx| window.press("cmd-shift-z", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), edited);
+    }
+}
