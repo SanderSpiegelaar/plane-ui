@@ -154,7 +154,8 @@ pub fn resolve<'a>(patterns: &[MonitorPattern], monitors: &'a [Monitor]) -> Opti
     })
 }
 
-pub(crate) const ASSIGNMENTS: &str = "workspace-to-monitor-force-assignment";
+/// The root key holding workspace-to-monitor assignments.
+pub const ASSIGNMENTS: &str = "workspace-to-monitor-force-assignment";
 
 pub(crate) fn read_patterns(
     item: &Item,
