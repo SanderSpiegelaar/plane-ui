@@ -5,6 +5,7 @@ mod binding_form;
 pub mod config_model;
 pub mod debug_control;
 pub mod fields;
+mod gaps_view;
 pub mod keybindings;
 pub mod shell;
 pub mod snapshots;

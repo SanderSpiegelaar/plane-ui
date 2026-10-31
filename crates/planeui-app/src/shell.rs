@@ -21,6 +21,7 @@ use planeui_core::store::UtcDateTime;
 
 use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigModel, SaveStatus};
 use crate::debug_control::AccordionPaddingControl;
+use crate::gaps_view::GapsView;
 use crate::keybindings::KeybindingsView;
 use crate::snapshots::SnapshotsView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
@@ -93,6 +94,7 @@ pub struct Shell {
     section: Section,
     padding_control: Entity<AccordionPaddingControl>,
     keybindings: Entity<KeybindingsView>,
+    gaps: Entity<GapsView>,
     /// Built when the Snapshots section opens and dropped when it closes, so the list is read
     /// fresh each time and not at all otherwise.
     snapshots: Option<Entity<SnapshotsView>>,
@@ -116,6 +118,7 @@ impl Shell {
     ) -> Self {
         let padding_control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
+        let gaps = cx.new(|cx| GapsView::new(model.clone(), window, cx));
         // Undo and Redo dispatch from the focused element, so the shell holds focus until a
         // control takes it.
         let focus_handle = cx.focus_handle();
@@ -136,6 +139,7 @@ impl Shell {
             section: Section::Keybindings,
             padding_control,
             keybindings,
+            gaps,
             snapshots: None,
             prefs_store,
             prefs,
@@ -323,6 +327,7 @@ impl Shell {
         let heading = div().text_lg().child(self.section.title());
         let body = match (self.section, &self.snapshots) {
             (Section::Keybindings, _) => self.keybindings.clone().into_any_element(),
+            (Section::Gaps, _) => self.gaps.clone().into_any_element(),
             (Section::General, _) => self.padding_control.clone().into_any_element(),
             (Section::Snapshots, Some(snapshots)) => snapshots.clone().into_any_element(),
             _ => div()
