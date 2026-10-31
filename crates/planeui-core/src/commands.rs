@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 use toml_edit::{Item, Value};
 
+use crate::keys::ModeName;
+
 /// AeroSpace version whose command syntax the catalogue models.
 pub const CATALOGUE_VERSION: &str = "0.21.3";
 
@@ -162,29 +164,6 @@ impl WorkspaceName {
     }
 
     /// The original name.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Binding mode name, resolved against configured modes by validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModeName(String);
-
-impl ModeName {
-    /// Creates a mode name that can be represented by AeroSpace's lexer.
-    ///
-    /// # Errors
-    /// Returns an error for an empty name or one containing both quote characters.
-    pub fn new(name: impl Into<String>) -> Result<Self, Unsupported> {
-        let name = name.into();
-        if name.is_empty() || (name.contains('\'') && name.contains('"')) {
-            return Err(unsupported("mode name is empty or cannot be quoted"));
-        }
-        Ok(Self(name))
-    }
-    /// The mode's name.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -994,7 +973,15 @@ impl Command {
                 wrap_around: args.has("--wrap-around"),
                 workspace: args.workspace()?,
             }),
-            "mode" => Ok(Self::Mode(ModeName::new(args.one()?)?)),
+            "mode" => {
+                let name = args.one()?;
+                if name.contains('\'') && name.contains('"') {
+                    return Err(unsupported("mode name cannot be quoted"));
+                }
+                ModeName::new(name)
+                    .map(Self::Mode)
+                    .map_err(|error| unsupported(error.to_string()))
+            }
             "reload-config" => {
                 args.none()?;
                 Ok(Self::ReloadConfig {
