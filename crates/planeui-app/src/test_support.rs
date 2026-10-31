@@ -12,6 +12,7 @@ use gpui_kit::{
 use planeui_core::aerospace::FakeAerospace;
 use planeui_core::apply::ApplyContext;
 use planeui_core::config_doc::KeyPath;
+use planeui_core::prefs::PrefsStore;
 use planeui_core::store::{ConfigStore, PathEnv, ResolvedConfig, SnapshotStore};
 use tempfile::TempDir;
 
@@ -22,6 +23,7 @@ pub struct Fixture {
     _directory: TempDir,
     pub config: PathBuf,
     pub snapshot_dir: PathBuf,
+    pub prefs_path: PathBuf,
     pub aerospace: Arc<FakeAerospace>,
 }
 
@@ -37,6 +39,7 @@ impl Fixture {
         Self {
             config,
             snapshot_dir: directory.path().join("snapshots"),
+            prefs_path: directory.path().join("prefs.json"),
             aerospace: Arc::new(aerospace),
             _directory: directory,
         }
@@ -53,6 +56,10 @@ impl Fixture {
         };
         let model = ConfigModel::open(resolved.display_path, context, loaded).unwrap();
         cx.new(|_| model)
+    }
+
+    pub fn prefs_store(&self) -> PrefsStore {
+        PrefsStore::new(self.prefs_path.clone())
     }
 
     pub fn disk(&self) -> String {
@@ -91,6 +98,7 @@ pub struct StartupFixture {
     _directory: TempDir,
     pub env: PathEnv,
     pub snapshot_dir: PathBuf,
+    pub prefs_path: PathBuf,
     pub aerospace: Arc<FakeAerospace>,
 }
 
@@ -105,6 +113,7 @@ impl StartupFixture {
                 xdg_config_home: None,
             },
             snapshot_dir: root.join("PlaneUI/snapshots"),
+            prefs_path: root.join("PlaneUI/prefs.json"),
             aerospace: Arc::new(aerospace),
             _directory: directory,
         }
@@ -114,11 +123,13 @@ impl StartupFixture {
         let env = self.env.clone();
         let aerospace = self.aerospace.clone();
         let snapshot_dir = self.snapshot_dir.clone();
+        let prefs_path = self.prefs_path.clone();
         move || {
             open_session(
                 &env,
                 aerospace.clone(),
                 SnapshotStore::new(snapshot_dir.clone()),
+                PrefsStore::new(prefs_path.clone()),
             )
         }
     }

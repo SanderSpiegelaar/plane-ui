@@ -16,6 +16,7 @@ use gpui_kit::{
 };
 use planeui_core::aerospace::{Aerospace, AerospaceVersion, CliAerospace, CliError, ReloadOutcome};
 use planeui_core::apply::ApplyContext;
+use planeui_core::prefs::{Prefs, PrefsStore};
 use planeui_core::store::{
     ConfigStore, Loaded, LocateError, PathEnv, SnapshotStore, create_default_config,
     resolve_config_path,
@@ -33,6 +34,10 @@ pub struct Session {
     pub context: ApplyContext,
     /// The config as read at startup.
     pub loaded: Loaded,
+    /// Where PlaneUI's own preferences live.
+    pub prefs_store: PrefsStore,
+    /// The preferences as read at startup.
+    pub prefs: Prefs,
 }
 
 /// Locates and reads the config the way AeroSpace does, using this process's environment.
@@ -52,11 +57,18 @@ pub fn load_session() -> anyhow::Result<Session> {
     let env = PathEnv::from_process().context("could not determine the home directory")?;
     let snapshot_dir =
         SnapshotStore::default_dir().context("could not determine the data directory")?;
-    open_session(&env, aerospace, SnapshotStore::new(snapshot_dir))
+    let prefs_path =
+        PrefsStore::default_path().context("could not determine the data directory")?;
+    open_session(
+        &env,
+        aerospace,
+        SnapshotStore::new(snapshot_dir),
+        PrefsStore::new(prefs_path),
+    )
 }
 
 /// Locates the config under `env`, asking `aerospace` for the path its server uses, and reads
-/// it. Blocks, so run it in the background.
+/// it and the preferences. Blocks, so run it in the background.
 ///
 /// # Errors
 ///
@@ -65,6 +77,7 @@ pub fn open_session(
     env: &PathEnv,
     aerospace: Arc<dyn Aerospace>,
     snapshots: SnapshotStore,
+    prefs_store: PrefsStore,
 ) -> anyhow::Result<Session> {
     let server_path = aerospace.config_path().unwrap_or_else(|error| {
         if !matches!(error, CliError::BinaryNotFound) {
@@ -75,6 +88,11 @@ pub fn open_session(
     let resolved = resolve_config_path(env, server_path)?;
     let store = ConfigStore::new(&resolved);
     let loaded = store.load()?;
+    // Preferences only hide offers, so unreadable ones must not keep the config from opening.
+    let prefs = prefs_store.load().unwrap_or_else(|error| {
+        log::warn!("{error}; using default preferences");
+        Prefs::default()
+    });
     Ok(Session {
         display_path: resolved.display_path,
         context: ApplyContext {
@@ -83,6 +101,8 @@ pub fn open_session(
             aerospace,
         },
         loaded,
+        prefs_store,
+        prefs,
     })
 }
 
@@ -185,8 +205,10 @@ impl MainWindow {
             let opened = cx
                 .background_spawn(async move {
                     let session = load()?;
-                    ConfigModel::open(session.display_path, session.context, session.loaded)
-                        .context("the config is not valid TOML")
+                    let model =
+                        ConfigModel::open(session.display_path, session.context, session.loaded)
+                            .context("the config is not valid TOML")?;
+                    anyhow::Ok((model, session.prefs_store, session.prefs))
                 })
                 .await;
             if let Err(error) = this.update_in(cx, |this, window, cx| this.open(opened, window, cx))
@@ -199,15 +221,15 @@ impl MainWindow {
 
     fn open(
         &mut self,
-        opened: anyhow::Result<ConfigModel>,
+        opened: anyhow::Result<(ConfigModel, PrefsStore, Prefs)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.screen = match opened {
-            Ok(model) => {
+            Ok((model, prefs_store, prefs)) => {
                 let model = cx.new(|_| model);
                 model.update(cx, ConfigModel::refresh_aerospace);
-                Screen::Ready(cx.new(|cx| Shell::new(model, window, cx)))
+                Screen::Ready(cx.new(|cx| Shell::new(model, prefs_store, prefs, window, cx)))
             }
             Err(error) => {
                 log::warn!("{error:#}");
@@ -486,6 +508,34 @@ mod tests {
                 .to_owned()
         });
         assert_eq!(state, "AeroSpace not installed");
+    }
+
+    fn auto_reload_banner_shown(cx: &mut TestAppContext, window: AnyWindowHandle) -> bool {
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.try_find("auto-reload-banner").is_some()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn keeping_auto_reload_on_is_remembered_across_launches(cx: &mut TestAppContext) {
+        let fixture = StartupFixture::new(FakeAerospace::new());
+        let config = fixture.env.xdg_config_path();
+        let text = "auto-reload-config = true\n";
+        write_file(&config, text);
+        let (window, _) = open_main(cx, &fixture);
+        assert!(auto_reload_banner_shown(cx, window));
+
+        click(cx, window, "keep-auto-reload");
+        assert!(!auto_reload_banner_shown(cx, window));
+        assert_eq!(fs::read_to_string(&config).unwrap(), text);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+
+        let (relaunched, main) = open_main(cx, &fixture);
+        assert!(is_ready(cx, &main));
+        assert!(!auto_reload_banner_shown(cx, relaunched));
+        let prefs = PrefsStore::new(fixture.prefs_path.clone()).load().unwrap();
+        assert!(prefs.is_auto_reload_dismissed(&config));
     }
 
     #[gpui_kit::test]

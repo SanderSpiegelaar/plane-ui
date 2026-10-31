@@ -1,10 +1,10 @@
-//! The permanent window layout: section sidebar, content pane, reload-error banner, status bar
-//! and toasts.
+//! The permanent window layout: section sidebar, content pane, reload-error and auto-reload
+//! banners, status bar and toasts.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::component::alert::Alert;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::status_bar::StatusBar;
@@ -13,8 +13,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, TestSupportExt as _, Window, div,
+    Styled as _, Subscription, Task, TestSupportExt as _, Window, div,
 };
+use planeui_core::config_doc::KeyPath;
+use planeui_core::prefs::{Prefs, PrefsStore};
 
 use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigModel, SaveStatus};
 use crate::debug_control::AccordionPaddingControl;
@@ -87,14 +89,24 @@ pub struct Shell {
     model: Entity<ConfigModel>,
     section: Section,
     padding_control: Entity<AccordionPaddingControl>,
+    prefs_store: PrefsStore,
+    prefs: Prefs,
+    prefs_save: Option<Task<()>>,
     focus_handle: FocusHandle,
     sections_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Shell {
-    /// The editor for `model`, landing on Keybindings.
-    pub fn new(model: Entity<ConfigModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The editor for `model`, landing on Keybindings. `prefs` were read from `prefs_store`,
+    /// where changes to them are saved.
+    pub fn new(
+        model: Entity<ConfigModel>,
+        prefs_store: PrefsStore,
+        prefs: Prefs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let padding_control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
         // Undo and Redo dispatch from the focused element, so the shell holds focus until a
         // control takes it.
@@ -115,6 +127,9 @@ impl Shell {
             model,
             section: Section::Keybindings,
             padding_control,
+            prefs_store,
+            prefs,
+            prefs_save: None,
             focus_handle,
             sections_focus: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -201,6 +216,88 @@ impl Shell {
         )
     }
 
+    fn render_auto_reload_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let model = self.model.read(cx);
+        let auto_reload = model.view().general.auto_reload_config.value() == Some(&true);
+        if !auto_reload || self.prefs.is_auto_reload_dismissed(model.display_path()) {
+            return None;
+        }
+        Some(
+            h_flex()
+                .id("auto-reload-banner")
+                .test_support()
+                .items_start()
+                .gap_3()
+                .p_3()
+                .child(
+                    Alert::info(
+                        "auto-reload-alert",
+                        "PlaneUI already reloads AeroSpace after every change, so with \
+                         auto-reload-config on each change is loaded twice.",
+                    )
+                    .title("auto-reload-config is on")
+                    .flex_1()
+                    .min_w_0(),
+                )
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .gap_2()
+                        .child(
+                            Button::new("turn-off-auto-reload")
+                                .primary()
+                                .label("Turn off")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.turn_off_auto_reload(window, cx);
+                                })),
+                        )
+                        .child(Button::new("keep-auto-reload").label("Keep on").on_click(
+                            cx.listener(|this, _, window, cx| this.keep_auto_reload(window, cx)),
+                        )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn turn_off_auto_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let edited = self.model.update(cx, |model, cx| {
+            model.edit("Turn off auto-reload-config", cx, |doc| {
+                doc.set_value(&KeyPath::from(["auto-reload-config"]), false.into())
+            })
+        });
+        if let Err(error) = edited {
+            log::error!("could not turn off auto-reload-config: {error}");
+            window.push_notification(
+                Notification::error(error.to_string()).title("Could not turn off auto-reload"),
+                cx,
+            );
+        }
+    }
+
+    fn keep_auto_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = self.model.read(cx).display_path().to_path_buf();
+        self.prefs.dismiss_auto_reload(&config);
+        cx.notify();
+
+        let store = self.prefs_store.clone();
+        let prefs = self.prefs.clone();
+        self.prefs_save = Some(cx.spawn_in(window, async move |this, cx| {
+            let saved = cx.background_spawn(async move { store.save(&prefs) }).await;
+            let Err(error) = saved else { return };
+            log::error!("{error}");
+            let shown = this.update_in(cx, |_, window, cx| {
+                window.push_notification(
+                    Notification::error(error.to_string())
+                        .title("PlaneUI will offer this again next time"),
+                    cx,
+                );
+            });
+            if let Err(error) = shown {
+                log::debug!("the shell closed before the preferences were saved: {error}");
+            }
+        }));
+    }
+
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let heading = div().text_lg().child(self.section.title());
         let body = match self.section {
@@ -250,6 +347,7 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let banner = self.render_banner(cx);
+        let auto_reload_banner = self.render_auto_reload_banner(cx);
         v_flex()
             .id("shell")
             .role(Role::Group)
@@ -276,6 +374,7 @@ impl Render for Shell {
                             .min_w_0()
                             .h_full()
                             .children(banner)
+                            .children(auto_reload_banner)
                             .child(self.render_content(cx)),
                     ),
             )
@@ -339,6 +438,7 @@ fn utc_clock(at: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::Duration;
 
     use gpui_kit::test::{TestAppContextExt as _, TestWindowExt as _};
@@ -352,7 +452,11 @@ mod tests {
 
     fn open_shell(cx: &mut TestAppContext, fixture: &Fixture) -> (AnyWindowHandle, Entity<Shell>) {
         let model = fixture.model(cx);
-        open_window(cx, |window, cx| Shell::new(model, window, cx))
+        let prefs_store = fixture.prefs_store();
+        let prefs = prefs_store.load().unwrap_or_default();
+        open_window(cx, |window, cx| {
+            Shell::new(model, prefs_store, prefs, window, cx)
+        })
     }
 
     fn model(cx: &mut TestAppContext, shell: &Entity<Shell>) -> Entity<ConfigModel> {
@@ -463,6 +567,68 @@ mod tests {
         })
         .await;
         assert_eq!(fixture.disk(), external, "reloading never writes");
+    }
+
+    fn banner_shown(cx: &mut TestAppContext, window: AnyWindowHandle) -> bool {
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.try_find("auto-reload-banner").is_some()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn turning_off_auto_reload_writes_false_and_cmd_z_restores_it(cx: &mut TestAppContext) {
+        let original =
+            "# Reload on save\nauto-reload-config = true # mine\naccordion-padding = 30\n";
+        let fixture = Fixture::new(original);
+        let (window, _) = open_shell(cx, &fixture);
+        assert!(banner_shown(cx, window));
+
+        in_window(cx, window, |window, cx| {
+            window.click("turn-off-auto-reload", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "# Reload on save\nauto-reload-config = false # mine\naccordion-padding = 30\n"
+        );
+        assert_eq!(fixture.snapshots(), vec![original.to_owned()]);
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+        assert!(!banner_shown(cx, window));
+
+        in_window(cx, window, |window, cx| window.press("cmd-z", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original);
+        assert!(banner_shown(cx, window), "offered again once it is back on");
+    }
+
+    #[gpui_kit::test]
+    async fn a_failed_prefs_save_is_shown(cx: &mut TestAppContext) {
+        let mut fixture = Fixture::new("auto-reload-config = true\n");
+        let blocker = fixture.prefs_path.with_file_name("not-a-directory");
+        fs::write(&blocker, "").unwrap();
+        fixture.prefs_path = blocker.join("prefs.json");
+        let (window, _) = open_shell(cx, &fixture);
+
+        in_window(cx, window, |window, cx| {
+            window.click("keep-auto-reload", cx);
+        });
+        cx.run_until_parked();
+
+        assert!(!banner_shown(cx, window), "kept for this session");
+        cx.wait_for(window, Duration::from_secs(1), |window, _| {
+            window.try_find("notification").is_some()
+        })
+        .await;
+    }
+
+    #[gpui_kit::test]
+    fn no_banner_when_auto_reload_is_off_or_absent(cx: &mut TestAppContext) {
+        for text in ["auto-reload-config = false\n", ORIGINAL] {
+            let fixture = Fixture::new(text);
+            let (window, _) = open_shell(cx, &fixture);
+            assert!(!banner_shown(cx, window), "{text}");
+        }
     }
 
     #[gpui_kit::test]
