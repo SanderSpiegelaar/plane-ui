@@ -1,0 +1,10 @@
+---
+source: crates/planeui-core/tests/gap_ops.rs
+assertion_line: 31
+expression: diff
+---
+@@ -2,3 +2,3 @@
+ inner.horizontal = 10 # inner
+-outer.left = 8 # left
++outer.left = 12 # left
+ outer.right = 8

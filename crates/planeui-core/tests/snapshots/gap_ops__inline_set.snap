@@ -1,0 +1,10 @@
+---
+source: crates/planeui-core/tests/gap_ops.rs
+assertion_line: 31
+expression: diff
+---
+@@ -1,3 +1,3 @@
+ config-version = 2
+-gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }
++gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 12, right = 8, top = 8, bottom = 8 } }
+ key-mapping = {preset='qwerty'}

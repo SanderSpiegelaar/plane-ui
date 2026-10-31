@@ -8,6 +8,7 @@ use toml_edit::{Document, Item, Value};
 
 use crate::commands::{ParsedScript, Script};
 use crate::config_doc::{ConfigDoc, KeyPath};
+use crate::gaps::{GapField, GapValue};
 use crate::keys::{Chord, ChordError, KeyMapping, ModeName};
 
 /// A value with the byte range it came from in the rendered document, for diagnostics.
@@ -285,9 +286,48 @@ pub struct General {
     pub auto_reload_config: Field<bool>,
 }
 
-/// Gaps (filled in by PUI-040).
+/// The six gap leaves, including read-only per-monitor values.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Gaps {}
+pub struct Gaps {
+    /// Space between columns.
+    pub inner_horizontal: GapValue,
+    /// Space between rows.
+    pub inner_vertical: GapValue,
+    /// Left edge.
+    pub outer_left: GapValue,
+    /// Right edge.
+    pub outer_right: GapValue,
+    /// Top edge.
+    pub outer_top: GapValue,
+    /// Bottom edge.
+    pub outer_bottom: GapValue,
+}
+
+impl Gaps {
+    /// Looks up a leaf in form order.
+    #[must_use]
+    pub fn get(&self, field: GapField) -> &GapValue {
+        match field {
+            GapField::InnerHorizontal => &self.inner_horizontal,
+            GapField::InnerVertical => &self.inner_vertical,
+            GapField::OuterLeft => &self.outer_left,
+            GapField::OuterRight => &self.outer_right,
+            GapField::OuterTop => &self.outer_top,
+            GapField::OuterBottom => &self.outer_bottom,
+        }
+    }
+
+    fn from_doc(doc: &ConfigDoc) -> Self {
+        Self {
+            inner_horizontal: GapValue::read(doc, GapField::InnerHorizontal),
+            inner_vertical: GapValue::read(doc, GapField::InnerVertical),
+            outer_left: GapValue::read(doc, GapField::OuterLeft),
+            outer_right: GapValue::read(doc, GapField::OuterRight),
+            outer_top: GapValue::read(doc, GapField::OuterTop),
+            outer_bottom: GapValue::read(doc, GapField::OuterBottom),
+        }
+    }
+}
 
 /// A binding mode, including malformed modes that must remain visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,7 +426,7 @@ impl ConfigView {
 
         Self {
             general,
-            gaps: Gaps::default(),
+            gaps: Gaps::from_doc(document),
             modes,
             key_mapping,
             window_rules: Vec::new(),

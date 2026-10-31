@@ -90,6 +90,7 @@ pub type Rule = fn(&ConfigDoc, &ConfigView, &mut Vec<ValidationIssue>);
 /// The rules [`validate`] runs, in order.
 pub const RULES: &[Rule] = &[
     schema,
+    gap_values,
     invalid_chords,
     duplicate_chords,
     mode_references,
@@ -97,6 +98,21 @@ pub const RULES: &[Rule] = &[
     no_way_back,
     macos_shortcuts,
 ];
+
+fn gap_values(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    for field in crate::gaps::GapField::ALL {
+        if matches!(view.gaps.get(field), crate::gaps::GapValue::Invalid { .. }) {
+            let path = field.path();
+            issues.push(ValidationIssue {
+                message: format!("{path} must be an integer of 0 or more or a per-monitor array"),
+                key_path: Some(path),
+                span: None,
+                severity: Severity::Error,
+                kind: IssueKind::WrongType,
+            });
+        }
+    }
+}
 
 /// The first binding that already uses a proposed chord in a mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
