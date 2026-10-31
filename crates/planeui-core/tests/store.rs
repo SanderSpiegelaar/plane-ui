@@ -3,9 +3,12 @@ use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use planeui_core::store::{
     CheckError, ConfigStore, DiskStamp, LoadError, LocateError, PathEnv, ResolvedConfig,
-    WriteError, resolve_config_path,
+    SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore, WriteError,
+    resolve_config_path,
 };
 use tempfile::TempDir;
 
@@ -409,4 +412,242 @@ fn a_failed_rename_removes_the_temp_file() {
 fn the_config_store_can_move_between_threads() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<ConfigStore>();
+    assert_send_sync::<SnapshotStore>();
+}
+
+/// 2026-10-31T17:15:03.042Z.
+fn base_time() -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(1_793_466_903_042)
+}
+
+fn seconds_after_base(seconds: u64) -> SystemTime {
+    base_time() + Duration::from_secs(seconds)
+}
+
+fn listed_ids(store: &SnapshotStore) -> Result<Vec<String>, SnapshotError> {
+    Ok(store
+        .list()?
+        .into_iter()
+        .map(|snapshot| snapshot.id.to_string())
+        .collect())
+}
+
+#[test]
+fn the_default_snapshot_dir_is_in_planeui_application_data() {
+    let dir = SnapshotStore::default_dir().unwrap();
+
+    assert!(dir.ends_with("PlaneUI/snapshots"), "{}", dir.display());
+}
+
+#[test]
+fn a_snapshot_creates_its_directory_and_keeps_the_bytes_exactly() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.join("support/PlaneUI/snapshots"));
+    let bytes = b"a = 1\r\n# \xff not utf-8\n";
+
+    let id = store.take_at(bytes, base_time()).unwrap();
+
+    assert_eq!(id.to_string(), "20261031T171503.042Z");
+    assert_eq!(store.read(&id).unwrap(), bytes);
+    assert_eq!(
+        directory_entries(store.dir()).unwrap(),
+        ["20261031T171503.042Z.toml"]
+    );
+}
+
+#[test]
+fn take_uses_the_current_time() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.clone());
+    let before = SystemTime::now() - Duration::from_millis(1);
+
+    let id = store.take(b"a = 1\n").unwrap();
+
+    let snapshot = store.list().unwrap().remove(0);
+    assert_eq!(snapshot.id, id);
+    assert!(snapshot.taken_at >= before && snapshot.taken_at <= SystemTime::now());
+}
+
+#[test]
+fn list_is_newest_first_with_time_and_size() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.clone());
+    let older = store.take_at(b"1", seconds_after_base(0)).unwrap();
+    let newer = store.take_at(b"22", seconds_after_base(1)).unwrap();
+
+    let snapshots = store.list().unwrap();
+
+    assert_eq!(
+        snapshots,
+        [
+            SnapshotMeta {
+                id: newer,
+                taken_at: seconds_after_base(1),
+                size: 2,
+            },
+            SnapshotMeta {
+                id: older,
+                taken_at: seconds_after_base(0),
+                size: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn listing_a_missing_directory_is_empty() {
+    let (_dir, root) = temp_root().unwrap();
+
+    let snapshots = SnapshotStore::new(root.join("missing")).list().unwrap();
+
+    assert_eq!(snapshots, []);
+}
+
+#[test]
+fn the_eleventh_snapshot_deletes_the_oldest() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.clone());
+    let ids: Vec<SnapshotId> = (0..=10)
+        .map(|second| {
+            store
+                .take_at(second.to_string().as_bytes(), seconds_after_base(second))
+                .unwrap()
+        })
+        .collect();
+
+    let snapshots = store.list().unwrap();
+
+    assert_eq!(snapshots.len(), SNAPSHOT_KEEP);
+    let expected: Vec<SnapshotId> = ids.iter().skip(1).rev().cloned().collect();
+    let listed: Vec<SnapshotId> = snapshots.into_iter().map(|snapshot| snapshot.id).collect();
+    assert_eq!(listed, expected);
+    assert!(store.read(ids.first().unwrap()).is_err());
+    assert_eq!(directory_entries(&root).unwrap().len(), SNAPSHOT_KEEP);
+}
+
+#[test]
+fn stray_files_are_neither_counted_nor_deleted() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.clone());
+    let strays = [
+        "20000101T000000.000Z.toml.bak",
+        "20000101T000000.000Z.txt",
+        "2000-01-01.toml",
+        "20000230T000000.000Z.toml",
+        "20000101T000000.000Z-01.toml",
+        "notes.md",
+    ];
+    for stray in strays {
+        write(&root.join(stray), "keep me").unwrap();
+    }
+    fs::create_dir(root.join("20000101T000000.000Z.toml")).unwrap();
+
+    for second in 0..12 {
+        store.take_at(b"x", seconds_after_base(second)).unwrap();
+    }
+
+    assert_eq!(store.list().unwrap().len(), SNAPSHOT_KEEP);
+    for stray in strays {
+        assert_eq!(fs::read_to_string(root.join(stray)).unwrap(), "keep me");
+    }
+    assert!(root.join("20000101T000000.000Z.toml").is_dir());
+}
+
+#[test]
+fn same_millisecond_snapshots_get_a_suffix_and_sort_in_order_taken() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root);
+    let ids: Vec<String> = (0..12)
+        .map(|index| {
+            store
+                .take_at(format!("{index}").as_bytes(), base_time())
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+
+    let expected_names: Vec<String> = std::iter::once("20261031T171503.042Z".to_owned())
+        .chain((1..12).map(|sequence| format!("20261031T171503.042Z-{sequence}")))
+        .collect();
+    assert_eq!(ids, expected_names);
+    let expected: Vec<String> = ids.iter().skip(2).rev().cloned().collect();
+    assert_eq!(listed_ids(&store).unwrap(), expected);
+    let newest = store.list().unwrap().remove(0);
+    assert_eq!(store.read(&newest.id).unwrap(), b"11");
+}
+
+#[test]
+fn a_snapshot_taken_after_the_clock_went_back_still_sorts_newest() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root);
+    for second in 10..20 {
+        store.take_at(b"x", seconds_after_base(second)).unwrap();
+    }
+
+    let id = store.take_at(b"latest", seconds_after_base(0)).unwrap();
+
+    assert_eq!(id.to_string(), "20261031T171522.042Z-1");
+    assert_eq!(store.read(&id).unwrap(), b"latest");
+    let listed = listed_ids(&store).unwrap();
+    assert_eq!(listed.len(), SNAPSHOT_KEEP);
+    assert_eq!(listed.first(), Some(&id.to_string()));
+    assert!(!listed.contains(&"20261031T171513.042Z".to_owned()));
+}
+
+#[test]
+fn a_time_before_1970_cannot_be_named() {
+    let (_dir, root) = temp_root().unwrap();
+    let store = SnapshotStore::new(root.clone());
+
+    let error = store
+        .take_at(b"x", UNIX_EPOCH - Duration::from_secs(1))
+        .unwrap_err();
+
+    assert!(
+        matches!(error, SnapshotError::UnsupportedTime { .. }),
+        "{error:?}"
+    );
+    assert_eq!(directory_entries(&root).unwrap(), [] as [String; 0]);
+}
+
+#[test]
+fn a_snapshot_into_a_read_only_directory_fails() {
+    let (_dir, root) = temp_root().unwrap();
+    let directory = root.join("snapshots");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    if !read_only_is_enforced(&directory).unwrap() {
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let result = SnapshotStore::new(directory.clone()).take_at(b"x", base_time());
+    let entries = directory_entries(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = result.unwrap_err();
+    assert!(matches!(error, SnapshotError::Write { .. }), "{error:?}");
+    assert!(error.to_string().contains(&directory.display().to_string()));
+    assert_eq!(entries, [] as [String; 0]);
+}
+
+#[test]
+fn a_snapshot_directory_that_cannot_be_created_fails() {
+    let (_dir, root) = temp_root().unwrap();
+    let parent = root.join("support");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+    if !read_only_is_enforced(&parent).unwrap() {
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let result = SnapshotStore::new(parent.join("snapshots")).take_at(b"x", base_time());
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        matches!(error, SnapshotError::CreateDir { .. }),
+        "{error:?}"
+    );
 }

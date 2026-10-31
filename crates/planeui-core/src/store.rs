@@ -1,5 +1,9 @@
 //! Config path resolution, atomic writes, and snapshots.
 
+mod snapshot;
+
+pub use snapshot::{SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore};
+
 use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
