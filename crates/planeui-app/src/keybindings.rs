@@ -10,7 +10,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -444,7 +444,7 @@ impl KeybindingsView {
         binding: &Binding,
         index: usize,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    ) -> Option<impl IntoElement + use<>> {
         let model = self.model.read(cx);
         let source = mode.name.value.clone();
         let raw_key = binding.raw_key.clone();
@@ -456,35 +456,40 @@ impl KeybindingsView {
             .map(|target| target.name.value.clone())
             .collect::<Vec<_>>();
         let view = cx.weak_entity();
-        Button::new(("duplicate", index))
-            .label("Duplicate to mode…")
-            .disabled(targets.is_empty())
-            .dropdown_menu(move |mut menu, _, _| {
-                for target in &targets {
-                    let view = view.clone();
-                    let source = source.clone();
-                    let raw_key = raw_key.clone();
-                    let target = target.clone();
-                    menu = menu.item(PopupMenuItem::new(target.clone()).on_click(
-                        move |_, window, cx| {
-                            if let Err(error) = view.update(cx, |this, cx| {
-                                this.apply_action(
-                                    &BindingAction::Duplicate {
-                                        mode: source.clone(),
-                                        raw_key: raw_key.clone(),
-                                        target: target.clone(),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            }) {
-                                log::debug!("keybindings closed before duplicating: {error}");
-                            }
-                        },
-                    ));
-                }
-                menu
-            })
+        if targets.is_empty() {
+            return None;
+        }
+        Some(
+            Button::new(("duplicate", index))
+                .small()
+                .label("Duplicate to mode…")
+                .dropdown_menu(move |mut menu, _, _| {
+                    for target in &targets {
+                        let view = view.clone();
+                        let source = source.clone();
+                        let raw_key = raw_key.clone();
+                        let target = target.clone();
+                        menu = menu.item(PopupMenuItem::new(target.clone()).on_click(
+                            move |_, window, cx| {
+                                if let Err(error) = view.update(cx, |this, cx| {
+                                    this.apply_action(
+                                        &BindingAction::Duplicate {
+                                            mode: source.clone(),
+                                            raw_key: raw_key.clone(),
+                                            target: target.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                }) {
+                                    log::debug!("keybindings closed before duplicating: {error}");
+                                }
+                            },
+                        ));
+                    }
+                    menu
+                }),
+        )
     }
 
     fn render_binding(
@@ -537,7 +542,7 @@ impl KeybindingsView {
                             .w_full()
                             .gap_3()
                             .items_start()
-                            .child(h_flex().w_40().flex_shrink_0().gap_1().children(
+                            .child(h_flex().w_32().flex_shrink_0().gap_1().children(
                                 chips.into_iter().map(|key| {
                                     Kbd::new(Keystroke {
                                         key,
@@ -546,33 +551,42 @@ impl KeybindingsView {
                                     .outline()
                                 }),
                             ))
-                            .child(div().flex_1().min_w_0().child(commands))
-                            .child(
-                                div()
-                                    .w_32()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(binding.inline_comment.clone().unwrap_or_default()),
-                            )
-                            .child(duplicate)
+                            .child(v_flex().flex_1().min_w_0().child(commands).when_some(
+                                binding.inline_comment.clone(),
+                                |column, comment| {
+                                    column.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(comment),
+                                    )
+                                },
+                            ))
+                            .children(duplicate)
                             .when(editable, |row| {
-                                row.child(Button::new(("edit", index)).label("Edit").on_click(
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.open_form(Some(&edit_binding), window, cx);
-                                    }),
-                                ))
+                                row.child(
+                                    Button::new(("edit", index)).small().label("Edit").on_click(
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_form(Some(&edit_binding), window, cx);
+                                        }),
+                                    ),
+                                )
                             })
-                            .child(Button::new(("delete", index)).label("Delete").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    this.apply_action(
-                                        &BindingAction::Delete {
-                                            mode: source.clone(),
-                                            raw_key: raw_key.clone(),
-                                        },
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )),
+                            .child(
+                                Button::new(("delete", index))
+                                    .small()
+                                    .label("Delete")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.apply_action(
+                                            &BindingAction::Delete {
+                                                mode: source.clone(),
+                                                raw_key: raw_key.clone(),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            ),
                     )
                     .when_some(reason, |row, reason| {
                         row.child(
