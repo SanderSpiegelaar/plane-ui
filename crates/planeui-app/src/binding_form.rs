@@ -6,7 +6,7 @@ use gpui_kit::component::select::{SearchableVec, Select, SelectEvent};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, TestSupportExt as _, Window, actions, div,
 };
@@ -40,6 +40,10 @@ pub(crate) struct BindingForm {
 impl EventEmitter<FormEvent> for BindingForm {}
 
 impl BindingForm {
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some() || self.commands.read(cx).has_invalid_field(cx)
+    }
+
     pub fn new(
         model: Entity<ConfigModel>,
         mode: String,

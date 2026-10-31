@@ -4,9 +4,9 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EntityId, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, TestSupportExt as _, Window, actions, div,
+    App, AppContext as _, Context, Entity, EntityId, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, TestSupportExt as _, Window, actions, div,
 };
 use planeui_core::commands::ParsedScript;
 use planeui_core::config_doc::{ConfigDoc, KeyPath};
@@ -67,6 +67,14 @@ pub struct RulesView {
 }
 
 impl RulesView {
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some()
+            || self.cards.iter().any(|card| match &card.body {
+                CardBody::Editable(form) => form.read(cx).has_invalid_field(cx),
+                CardBody::ReadOnly { .. } => false,
+            })
+    }
+
     pub fn new(
         model: Entity<ConfigModel>,
         live_data: Entity<LiveData>,

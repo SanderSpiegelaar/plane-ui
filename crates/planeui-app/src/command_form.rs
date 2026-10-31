@@ -13,7 +13,7 @@ use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectStat
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
 };
 use planeui_core::commands::{
@@ -67,6 +67,14 @@ pub(crate) struct CommandForm {
 impl EventEmitter<CommandEvent> for CommandForm {}
 
 impl CommandForm {
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some()
+            || self
+                .commit_fields
+                .iter()
+                .any(|field| field.read(cx).has_error())
+    }
+
     pub fn new(
         model: Entity<ConfigModel>,
         commands: Vec<CommandDraft>,

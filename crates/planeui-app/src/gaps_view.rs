@@ -6,9 +6,9 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TestSupportExt as _, Window, div,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, TestSupportExt as _, Window, div,
 };
 use planeui_core::config_doc::ConfigDoc;
 use planeui_core::gaps::{
@@ -108,6 +108,21 @@ impl GapsView {
         };
         this.sync_rules(window, cx);
         this
+    }
+
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some()
+            || self
+                .fields
+                .iter()
+                .any(|(_, field)| field.read(cx).has_error())
+            || self
+                .rules
+                .iter()
+                .flat_map(|rule| &rule.rows)
+                .any(|(picker, field)| {
+                    picker.read(cx).has_invalid_field(cx) || field.read(cx).has_error()
+                })
     }
 
     fn sync_rules(&mut self, window: &mut Window, cx: &mut Context<Self>) {

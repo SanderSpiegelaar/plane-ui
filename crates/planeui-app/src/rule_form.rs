@@ -7,7 +7,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, TestSupportExt as _, Window, div,
 };
@@ -107,6 +107,15 @@ pub(crate) struct RuleForm {
 impl EventEmitter<RuleValues> for RuleForm {}
 
 impl RuleForm {
+    pub fn has_invalid_field(&self, cx: &App) -> bool {
+        self.error.is_some()
+            || self
+                .conditions
+                .iter()
+                .any(|condition| condition.value.read(cx).has_error())
+            || self.commands.read(cx).has_invalid_field(cx)
+    }
+
     pub fn show_error(&mut self, error: SharedString, cx: &mut Context<Self>) {
         self.error = Some(error);
         cx.notify();

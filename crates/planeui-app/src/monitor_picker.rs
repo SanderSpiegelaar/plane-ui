@@ -7,7 +7,7 @@ use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectStat
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, TestSupportExt as _,
     Window, div,
 };
@@ -89,6 +89,10 @@ fn monitor_options(state: &LiveState) -> Vec<MonitorChoice> {
 }
 
 impl MonitorPicker {
+    pub(crate) fn has_invalid_field(&self, cx: &App) -> bool {
+        self.text.read(cx).has_error()
+    }
+
     pub(crate) fn new(
         live_data: Entity<LiveData>,
         initial: Option<&MonitorPattern>,

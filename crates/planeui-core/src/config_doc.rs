@@ -1235,7 +1235,9 @@ impl ParseError {
     }
 }
 
-fn line_and_column(source: &str, offset: usize) -> (usize, usize) {
+/// The 1-based line and character column of byte `offset` in `source`.
+#[must_use]
+pub fn line_and_column(source: &str, offset: usize) -> (usize, usize) {
     let before = source.get(..offset).unwrap_or(source);
     let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
     let line = before.matches('\n').count() + 1;

@@ -5,19 +5,21 @@ use std::time::SystemTime;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Task, TestSupportExt as _, Window, div,
 };
 use planeui_core::aerospace::newer_than_catalogue;
 use planeui_core::commands::CATALOGUE_VERSION;
 use planeui_core::config_doc::KeyPath;
+use planeui_core::monitors::ASSIGNMENTS;
 use planeui_core::prefs::{Prefs, PrefsStore};
 use planeui_core::store::UtcDateTime;
 
@@ -29,7 +31,7 @@ use crate::live_data::LiveData;
 use crate::rules_view::RulesView;
 use crate::snapshots::SnapshotsView;
 use crate::workspaces_view::WorkspacesView;
-use crate::{NextSection, PreviousSection, Redo, Undo};
+use crate::{NextSection, PreviousSection, Redo, ShowSection, Undo};
 
 /// The key context in which the arrow keys move between sections.
 pub const SECTIONS_CONTEXT: &str = "Sections";
@@ -89,6 +91,20 @@ impl Section {
 
     fn next(self) -> Self {
         Self::ALL.get(self.index() + 1).copied().unwrap_or(self)
+    }
+
+    /// The section that edits `key`. Keys no form edits belong to General, which lists them.
+    fn owning(key: Option<&KeyPath>) -> Self {
+        match key
+            .and_then(|key| key.segments().first())
+            .map(String::as_str)
+        {
+            Some("mode") => Self::Keybindings,
+            Some("gaps") => Self::Gaps,
+            Some("on-window-detected") => Self::WindowRules,
+            Some("persistent-workspaces" | ASSIGNMENTS) => Self::WorkspacesAndMonitors,
+            _ => Self::General,
+        }
     }
 }
 
@@ -198,10 +214,42 @@ impl Shell {
         cx.notify();
     }
 
+    /// Whether `section` holds a field that will not commit, or the document has an error in
+    /// a key the section edits.
+    fn has_errors(&self, section: Section, cx: &App) -> bool {
+        let invalid_field = match section {
+            Section::Keybindings => self.keybindings.read(cx).has_invalid_field(cx),
+            Section::Gaps => self.gaps.read(cx).has_invalid_field(cx),
+            Section::General => self.general.read(cx).has_invalid_field(cx),
+            Section::WindowRules => self.rules.read(cx).has_invalid_field(cx),
+            Section::WorkspacesAndMonitors => self.workspaces.read(cx).has_invalid_field(cx),
+            Section::Snapshots => false,
+        };
+        invalid_field
+            || self
+                .model
+                .read(cx)
+                .report()
+                .errors()
+                .any(|issue| Section::owning(issue.key_path.as_ref()) == section)
+    }
+
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let items = Section::ALL.map(|section| {
             SidebarMenuItem::new(section.title())
                 .active(section == self.section)
+                .when(self.has_errors(section, cx), |item| {
+                    item.suffix(move |_, cx| {
+                        div()
+                            .id(SharedString::from(format!("{section:?}-errors")))
+                            .test_support()
+                            .role(Role::Status)
+                            .aria_label("Has errors")
+                            .size_2()
+                            .rounded_full()
+                            .bg(cx.theme().danger)
+                    })
+                })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     window.focus(&this.sections_focus, cx);
                     this.select(section, window, cx);
@@ -429,12 +477,25 @@ impl Render for Shell {
             .role(Role::Group)
             .aria_label("PlaneUI")
             .track_focus(&self.focus_handle)
-            .on_action(
-                cx.listener(|this, _: &Undo, _, cx| this.model.update(cx, ConfigModel::undo)),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, _, cx| this.model.update(cx, ConfigModel::redo)),
-            )
+            // Cmd-Z in a text field never gets here: the field's own binding wins. Only the
+            // menu's Undo does, so it is handed to the field to match the key.
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                if window.is_action_available(&input::Undo, cx) {
+                    window.dispatch_action(Box::new(input::Undo), cx);
+                } else {
+                    this.model.update(cx, ConfigModel::undo);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                if window.is_action_available(&input::Redo, cx) {
+                    window.dispatch_action(Box::new(input::Redo), cx);
+                } else {
+                    this.model.update(cx, ConfigModel::redo);
+                }
+            }))
+            .on_action(cx.listener(|this, action: &ShowSection, window, cx| {
+                this.select(action.0, window, cx);
+            }))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -875,6 +936,106 @@ mod tests {
             shell.update(cx, |shell, cx| shell.select(Section::Gaps, window, cx));
         });
         assert!(shell.read_with(cx, |shell, _| shell.snapshots.is_none()));
+    }
+
+    fn badged(cx: &mut TestAppContext, window: AnyWindowHandle, section: Section) -> bool {
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find(SharedString::from(format!("{section:?}-errors")))
+                .is_some()
+        })
+    }
+
+    fn badged_sections(cx: &mut TestAppContext, window: AnyWindowHandle) -> Vec<Section> {
+        Section::ALL
+            .into_iter()
+            .filter(|section| badged(cx, window, *section))
+            .collect()
+    }
+
+    #[gpui_kit::test]
+    fn an_invalid_gap_value_badges_gaps_until_fixed(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        in_window(cx, window, |window, cx| {
+            shell.update(cx, |shell, cx| shell.select(Section::Gaps, window, cx));
+            window.render_frame(cx);
+            window.click("gaps.inner.horizontal", cx);
+            window.press("cmd-a", cx);
+            window.input("-5", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(badged_sections(cx, window), vec![Section::Gaps]);
+
+        in_window(cx, window, |window, cx| {
+            window.press("cmd-a", cx);
+            window.input("5", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(badged_sections(cx, window), Vec::<Section>::new());
+        assert_eq!(
+            fixture.aerospace.reload_count(),
+            1,
+            "only the fix is written"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn errors_in_the_file_badge_the_section_that_edits_the_key(cx: &mut TestAppContext) {
+        let fixture = Fixture::new("[gaps]\ninner.horizontal = 'wide'\n");
+        let (window, _) = open_shell(cx, &fixture);
+        assert_eq!(badged_sections(cx, window), vec![Section::Gaps]);
+    }
+
+    #[gpui_kit::test]
+    fn cmd_number_shows_the_section_in_sidebar_order(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        for (section, keys) in Section::ALL
+            .into_iter()
+            .zip(["cmd-1", "cmd-2", "cmd-3", "cmd-4", "cmd-5", "cmd-6"])
+            .rev()
+        {
+            in_window(cx, window, |window, cx| window.press(keys, cx));
+            assert_eq!(shell.read_with(cx, |shell, _| shell.section()), section);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn menu_undo_acts_on_a_focused_text_field_like_cmd_z(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        set_padding(&model(cx, &shell), 12, cx);
+        cx.run_until_parked();
+        let edited = fixture.disk();
+
+        in_window(cx, window, |window, cx| {
+            shell.update(cx, |shell, cx| shell.select(Section::General, window, cx));
+            window.render_frame(cx);
+            window.click("accordion-padding", cx);
+            window.input("9", cx);
+            window.dispatch_action(Box::new(Undo), cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| window.press("enter", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            edited,
+            "the typing was undone, not the file"
+        );
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+
+        let shell_focus = shell.read_with(cx, |shell, _| shell.focus_handle.clone());
+        in_window(cx, window, |window, cx| {
+            window.focus(&shell_focus, cx);
+            window.dispatch_action(Box::new(Undo), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
     }
 
     #[gpui_kit::test]
