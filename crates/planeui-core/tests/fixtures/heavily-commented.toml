@@ -1,0 +1,31 @@
+# ==========================================================================
+#  Header block with ASCII art and blank lines
+# ==========================================================================
+
+    # Indented comment before the first key
+config-version = 2 # trailing comment after a value
+start-at-login   =   false    #   spaced-out trailing comment
+
+# Comment between top-level keys
+
+accordion-padding = 30
+#commented-out-key = 'value'
+
+[gaps] # comment after a table header
+    # indented comment inside a table
+    inner.horizontal = 10 # inner
+    inner.vertical =   10
+
+    outer.left = 8
+# comment at column zero inside a table
+    outer.right = 8
+
+[mode.main.binding]
+alt-h = 'focus left'   # vim-style
+# alt-j = 'focus down'
+alt-k = 'focus up'
+alt-slash = 'layout tiles horizontal vertical' # toggles
+
+
+
+# Trailing comment after several blank lines, no newline at end

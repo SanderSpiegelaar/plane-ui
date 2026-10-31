@@ -1,0 +1,18 @@
+config-version = 2
+# CRLF line endings
+start-at-login = false
+
+[gaps]
+inner.horizontal = 10 # trailing
+inner.vertical = 10
+
+[mode.main.binding]
+alt-h = 'focus left'
+alt-l = [
+    'focus right',
+]
+alt-m = '''multi-line
+literal'''
+alt-n = """
+multi-line \
+  basic"""

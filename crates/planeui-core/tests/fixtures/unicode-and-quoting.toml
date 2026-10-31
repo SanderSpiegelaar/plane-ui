@@ -1,0 +1,19 @@
+config-version = 2
+
+[mode.main.binding]
+alt-a = 'exec-and-forget open -a "Visual Studio Code"'
+alt-b = "exec-and-forget echo \"double\" \t tab é \U0001F600"
+alt-c = '''multi-line literal
+with 'quotes' and \backslashes\ kept'''
+alt-d = """
+multi-line basic \
+  with line continuation"""
+"alt-e" = 'quoted key'
+'alt-f' = 'literal-quoted key'
+
+[workspace-to-monitor-force-assignment]
+"Ü" = 'main'
+'λ' = 'secondary'
+"🚀" = ['built-in', 'main']
+"with space" = 'main'
+"tab\tkey" = 'main'
