@@ -1,0 +1,8 @@
+---
+source: crates/planeui-core/tests/monitor_ops.rs
+assertion_line: 145
+expression: "TextDiff::from_lines(source,\ndoc.to_string()).unified_diff().context_radius(1).to_string()"
+---
+@@ -4 +4,2 @@
+ B = ['main', 'secondary', 'lg'] # beta
++C = 2

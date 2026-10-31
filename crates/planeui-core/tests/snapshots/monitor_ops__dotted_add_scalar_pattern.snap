@@ -1,0 +1,10 @@
+---
+source: crates/planeui-core/tests/monitor_ops.rs
+assertion_line: 145
+expression: "TextDiff::from_lines(source,\ndoc.to_string()).unified_diff().context_radius(1).to_string()"
+---
+@@ -1,3 +1,3 @@
+ # keep
+-workspace-to-monitor-force-assignment.A = '1' # alpha
++workspace-to-monitor-force-assignment.A = ['1', "main"] # alpha
+ workspace-to-monitor-force-assignment.B = ['main', 'secondary', 'lg'] # beta

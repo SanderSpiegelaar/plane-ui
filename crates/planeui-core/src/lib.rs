@@ -10,6 +10,7 @@ pub mod config_view;
 pub mod gaps;
 pub mod history;
 pub mod keys;
+pub mod monitors;
 pub mod prefs;
 pub mod rules;
 pub mod settings;

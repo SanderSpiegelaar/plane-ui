@@ -13,6 +13,20 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 use std::{env, fmt, thread};
 
+/// A connected monitor in AeroSpace's left-to-right sequence order.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Monitor {
+    /// One-based sequence number.
+    #[serde(rename = "monitor-id")]
+    pub id: u32,
+    /// Display name reported by macOS.
+    #[serde(rename = "monitor-name")]
+    pub name: String,
+    /// Whether macOS considers this the main display.
+    #[serde(rename = "monitor-is-main")]
+    pub is_main: bool,
+}
+
 /// Talks to AeroSpace.
 ///
 /// Calls block until the CLI answers or times out, so the app runs them off the UI thread.

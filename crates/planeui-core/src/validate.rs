@@ -100,6 +100,7 @@ pub const RULES: &[Rule] = &[
     setting_values,
     workspace_values,
     window_rules,
+    monitor_values,
     invalid_chords,
     duplicate_chords,
     mode_references,
@@ -197,6 +198,32 @@ fn window_rules(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<Valida
                         "regex `{pattern}` could not be checked locally; AeroSpace's regex engine may accept it"
                     ),
                 );
+            }
+        }
+    }
+}
+
+fn monitor_values(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    for assignment in &view.workspace_to_monitor {
+        let path = KeyPath::from([crate::monitors::ASSIGNMENTS, assignment.workspace.as_str()]);
+        if let Some(error) = &assignment.error {
+            issues.push(ValidationIssue {
+                key_path: Some(path.clone()),
+                span: assignment.span.clone(),
+                severity: Severity::Error,
+                kind: IssueKind::InvalidValue,
+                message: error.to_string(),
+            });
+        }
+        for pattern in &assignment.patterns {
+            if let Some(message) = pattern.regex_warning() {
+                issues.push(ValidationIssue {
+                    key_path: Some(path.clone()),
+                    span: assignment.span.clone(),
+                    severity: Severity::Warning,
+                    kind: IssueKind::InvalidValue,
+                    message,
+                });
             }
         }
     }

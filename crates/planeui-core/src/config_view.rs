@@ -10,6 +10,7 @@ use crate::commands::{ParsedScript, Script};
 use crate::config_doc::{ConfigDoc, KeyPath};
 use crate::gaps::{GapField, GapValue};
 use crate::keys::{Chord, ChordError, KeyMapping, ModeName};
+use crate::monitors::{MonitorPattern, PatternError, PatternShape};
 use crate::settings::{Setting, SettingValue};
 
 pub use crate::rules::WindowRule;
@@ -367,9 +368,20 @@ pub struct Binding {
     pub span: Option<Range<usize>>,
 }
 
-/// A workspace-to-monitor assignment (filled in by PUI-054).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WorkspaceAssignment {}
+/// A workspace-to-monitor assignment in file order, including malformed read-only rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment {
+    /// The original workspace name.
+    pub workspace: String,
+    /// Selectors in priority order. Empty on a malformed row.
+    pub patterns: Vec<MonitorPattern>,
+    /// Scalar or array source representation.
+    pub shape: PatternShape,
+    /// Byte range of the assignment value, when known.
+    pub span: Option<Range<usize>>,
+    /// Why a malformed row is read-only.
+    pub error: Option<PatternError>,
+}
 
 /// Typed, read-only view of a config document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,7 +400,7 @@ pub struct ConfigView {
     /// Window rules in file order.
     pub window_rules: Vec<WindowRule>,
     /// Workspace-to-monitor assignments in file order.
-    pub workspace_to_monitor: Vec<WorkspaceAssignment>,
+    pub workspace_to_monitor: Vec<Assignment>,
     /// Every catalogued-level key in the file, in file order.
     pub keys: Vec<CataloguedKey>,
     /// Keys PlaneUI shows but does not edit: callbacks, `exec`, key-code aliases, deprecated
@@ -458,7 +470,37 @@ impl ConfigView {
             window_rules: crate::rules::read_rules(
                 root.and_then(|root| root.get("on-window-detected")),
             ),
-            workspace_to_monitor: Vec::new(),
+            workspace_to_monitor: document
+                .get(&KeyPath::from([crate::monitors::ASSIGNMENTS]))
+                .and_then(Item::as_table_like)
+                .map(|table| {
+                    table
+                        .iter()
+                        .map(|(workspace, item)| {
+                            let parsed = crate::monitors::read_patterns(item);
+                            let (patterns, shape, error) = match parsed {
+                                Ok((patterns, shape)) => (patterns, shape, None),
+                                Err(error) => (
+                                    Vec::new(),
+                                    if item.is_array() {
+                                        PatternShape::List
+                                    } else {
+                                        PatternShape::Single
+                                    },
+                                    Some(error),
+                                ),
+                            };
+                            Assignment {
+                                workspace: workspace.to_owned(),
+                                patterns,
+                                shape,
+                                span: spans(&[crate::monitors::ASSIGNMENTS, workspace]),
+                                error,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             keys,
             out_of_scope,
         }
