@@ -221,9 +221,11 @@ impl ConfigDoc {
         Ok(())
     }
 
-    /// Removes the value or table at `path` with the comment lines directly above it. Comments
-    /// separated from it by a blank line stay. Implicit and dotted parent tables left empty are
-    /// dropped; `[table]` headers the user wrote are kept.
+    /// Removes the value or table at `path`. Comment lines directly above a value stay with
+    /// the next sibling when no blank line separates them; otherwise they go with the value.
+    /// Comments separated from the removed item by a blank line stay. Inline-table removal
+    /// is unchanged. Implicit and dotted parent tables left empty are dropped; `[table]`
+    /// headers the user wrote are kept.
     ///
     /// # Errors
     ///
@@ -821,14 +823,28 @@ fn remove_from(visible: &mut Table, relative: &[String], at_root: bool) -> Optio
         Container::Table(table) => table,
     };
     let prefix = raw(parent.key(leaf)?.leaf_decor().prefix(), "");
+    let index = order.iter().position(|keys| keys.as_slice() == relative);
+    let continues_group = index
+        .and_then(|index| order.get(index + 1))
+        .and_then(|next| next.split_last())
+        .filter(|(_, next_parents)| *next_parents == parents)
+        .and_then(|(next_leaf, _)| parent.key(next_leaf))
+        .is_some_and(|key| foreign_comments(&raw(key.leaf_decor().prefix(), "")).is_empty());
     if !matches!(parent.remove(leaf)?, Item::Value(_)) {
         return Some(());
     }
-    let kept = foreign_comments(&prefix);
+    let kept = if continues_group {
+        prefix
+            .rfind('\n')
+            .and_then(|index| prefix.get(..=index))
+            .unwrap_or_default()
+    } else {
+        foreign_comments(&prefix)
+    };
     if kept.is_empty() {
         return Some(());
     }
-    let index = order.iter().position(|keys| keys.as_slice() == relative)?;
+    let index = index?;
     if let Some(next) = order.get(index + 1) {
         let (next_leaf, next_parents) = next.split_last()?;
         let mut container = container_mut(visible, next_parents)?;
@@ -1228,11 +1244,11 @@ mod tests {
     }
 
     #[test]
-    fn remove_takes_only_its_own_comment() {
+    fn remove_keeps_heading_for_the_next_key_in_the_group() {
         let output = edited("a = 1\n\n# about b\nb = 2\nc = 3\n", |document| {
             document.remove(&KeyPath::from(["b"]))
         });
-        assert_eq!(output, "a = 1\n\nc = 3\n");
+        assert_eq!(output, "a = 1\n\n# about b\nc = 3\n");
     }
 
     #[test]

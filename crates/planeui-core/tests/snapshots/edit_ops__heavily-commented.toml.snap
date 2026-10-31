@@ -44,8 +44,7 @@ expression: "diffs(name, KEY_EDITS)"
  # comment at column zero inside a table
 
 ## remove config-version
-@@ -4,4 +4,2 @@
- 
--    # Indented comment before the first key
+@@ -5,3 +5,2 @@
+     # Indented comment before the first key
 -config-version = 2 # trailing comment after a value
  start-at-login   =   false    #   spaced-out trailing comment

@@ -81,6 +81,86 @@ const KEY_EDITS: &[(&str, Edit)] = &[
 ];
 
 #[test]
+fn removing_first_binding_keeps_group_heading() {
+    let source = "[mode.main.binding]\n\n# See: https://nikitabobko.github.io/AeroSpace/commands#layout\nalt-slash = 'layout tiles horizontal vertical'\nalt-comma = 'layout accordion horizontal vertical'\n\n# See: https://nikitabobko.github.io/AeroSpace/commands#focus\nalt-left = 'focus left'\n";
+    let mut document = ConfigDoc::parse(source).unwrap();
+    document
+        .remove(&path(["mode", "main", "binding", "alt-slash"]))
+        .unwrap();
+    assert_eq!(
+        document.to_string(),
+        source.replace("alt-slash = 'layout tiles horizontal vertical'\n", "")
+    );
+}
+
+#[test]
+fn removing_binding_drops_heading_only_at_group_end() {
+    for (tail, expected_tail) in [
+        (
+            "\nalt-comma = 'layout accordion'\n",
+            "\nalt-comma = 'layout accordion'\n",
+        ),
+        (
+            "# separate notes\n\nalt-comma = 'layout accordion'\n",
+            "# separate notes\n\nalt-comma = 'layout accordion'\n",
+        ),
+        ("", ""),
+    ] {
+        let source =
+            format!("[mode.main.binding]\n\n# layout heading\nalt-slash = 'layout tiles'\n{tail}");
+        let mut document = ConfigDoc::parse(&source).unwrap();
+        document
+            .remove(&path(["mode", "main", "binding", "alt-slash"]))
+            .unwrap();
+        assert_eq!(
+            document.to_string(),
+            format!("[mode.main.binding]\n\n{expected_tail}")
+        );
+    }
+}
+
+#[test]
+fn removing_dotted_binding_keeps_group_heading() {
+    for prefix in ["", "[mode]\n"] {
+        let dotted = if prefix.is_empty() {
+            "mode.main.binding"
+        } else {
+            "main.binding"
+        };
+        let removed = format!("{dotted}.alt-slash = 'layout tiles'\n");
+        let source = format!(
+            "{prefix}\n# layout heading\n{removed}# remaining binding\n  {dotted}.alt-comma = 'layout accordion'\n"
+        );
+        let mut document = ConfigDoc::parse(&source).unwrap();
+        document
+            .remove(&path(["mode", "main", "binding", "alt-slash"]))
+            .unwrap();
+        assert_eq!(document.to_string(), source.replace(&removed, ""));
+    }
+}
+
+#[test]
+fn removing_last_binding_drops_its_comment() {
+    let source = "[mode.main.binding]\nalt-comma = 'layout accordion'\n\n# last binding\nalt-slash = 'layout tiles'\n";
+    let mut document = ConfigDoc::parse(source).unwrap();
+    document
+        .remove(&path(["mode", "main", "binding", "alt-slash"]))
+        .unwrap();
+    assert_eq!(
+        document.to_string(),
+        "[mode.main.binding]\nalt-comma = 'layout accordion'\n\n"
+    );
+}
+
+#[test]
+fn removing_dotted_key_does_not_share_heading_with_another_table() {
+    let source = "# only left\ngaps.outer.left = 8\nother.value = 1\n";
+    let mut document = ConfigDoc::parse(source).unwrap();
+    document.remove(&path(["gaps", "outer", "left"])).unwrap();
+    assert_eq!(document.to_string(), "other.value = 1\n");
+}
+
+#[test]
 fn key_edits_per_style() {
     for name in [
         "table-style.toml",
