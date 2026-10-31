@@ -1,0 +1,14 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -3,3 +3,3 @@
+ [[on-window-detected]]
+-if.app-id = 'com.apple.systempreferences'
++if.app-id = "com.foo"
+ if.app-name-regex-substring = 'settings'
+@@ -9,3 +9,3 @@
+ check-further-callbacks = true
+-run = ['layout floating', 'move-node-to-workspace S']
++run = ["layout tiling"]

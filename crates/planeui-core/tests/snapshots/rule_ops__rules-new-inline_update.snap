@@ -1,0 +1,10 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -3,3 +3,3 @@
+     # Finder windows
+-    { if = 'test %{app-bundle-id} = com.apple.finder && test %{window-title} ~= "Open dialog"', run = 'layout floating' },
++    { if = 'test %{app-bundle-id} = com.foo', run = "layout tiling", check-further-callbacks = true },
+     # All windows

@@ -1,0 +1,13 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -3,3 +3,2 @@
+ on-window-detected = [
+-    { if.app-id = 'com.apple.finder', run = 'layout floating' },
+     {
+@@ -10,2 +9,3 @@
+     },
++    { if.app-id = 'com.apple.finder', run = 'layout floating' },
+     { if = { app-name-regex-substring = 'slack' }, run = 'move-node-to-workspace 3', },

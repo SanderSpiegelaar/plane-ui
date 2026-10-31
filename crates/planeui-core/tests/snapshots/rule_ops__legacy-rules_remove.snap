@@ -1,0 +1,17 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -3,11 +3,2 @@
+ [[on-window-detected]]
+-if.app-id = 'com.apple.systempreferences'
+-if.app-name-regex-substring = 'settings'
+-if.window-title-regex-substring = 'substring'
+-if.workspace = 'workspace-name'
+-if.during-aerospace-startup = true
+-check-further-callbacks = true
+-run = ['layout floating', 'move-node-to-workspace S']
+-
+-[[on-window-detected]]
+ if = { app-id = 'org.alacritty' }

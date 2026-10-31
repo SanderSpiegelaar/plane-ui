@@ -1,0 +1,20 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -2,2 +2,7 @@
+ 
++# All windows
++[[on-window-detected]]
++if = 'true'
++run = ['layout tiling']
++
+ # Finder windows
+@@ -6,7 +11,2 @@
+ run = 'layout floating'
+-
+-# All windows
+-[[on-window-detected]]
+-if = 'true'
+-run = ['layout tiling']

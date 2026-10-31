@@ -408,6 +408,76 @@ impl ConfigDoc {
         Ok(())
     }
 
+    /// Creates an empty array of table sections at a missing path.
+    pub(crate) fn insert_table_array(&mut self, path: &KeyPath) -> Result<(), EditError> {
+        if self.get(path).is_some() {
+            return Err(EditError::AlreadyExists(path.clone()));
+        }
+        self.set_value(path, Value::Array(Array::new()))?;
+        let item = path
+            .segments()
+            .iter()
+            .try_fold(self.document.as_item_mut(), |item, segment| {
+                item.as_table_like_mut()?.get_mut(segment)
+            })
+            .ok_or_else(|| EditError::NotFound(path.clone()))?;
+        *item = Item::ArrayOfTables(ArrayOfTables::new());
+        Ok(())
+    }
+
+    /// Applies path edits beneath a temporary root without converting the element's TOML style.
+    pub(crate) fn array_edit_table(
+        &mut self,
+        path: &KeyPath,
+        index: usize,
+        edit: impl FnOnce(&mut Self, &KeyPath) -> Result<(), EditError>,
+    ) -> Result<(), EditError> {
+        let mut edited = self.clone();
+        let array = edited.array_mut(path)?;
+        let (len, item) = match &array {
+            ArrayMut::Inline(array) => (array.len(), array.get(index).cloned().map(Item::Value)),
+            ArrayMut::Tables(tables) => (tables.len(), tables.get(index).cloned().map(Item::Table)),
+        };
+        let item = item.ok_or_else(|| EditError::IndexOutOfBounds {
+            path: path.clone(),
+            index,
+            len,
+        })?;
+        if !item.is_table_like() {
+            return Err(EditError::NotATableElement(path.clone()));
+        }
+        let mut rule = Self {
+            document: DocumentMut::new(),
+            line_ending: self.line_ending.clone(),
+        };
+        rule.document.as_table_mut().insert("rule", item);
+        edit(&mut rule, &KeyPath::from(["rule"]))?;
+        let item = rule
+            .document
+            .as_table_mut()
+            .remove("rule")
+            .ok_or_else(|| EditError::NotATableElement(path.clone()))?;
+        match (array, item) {
+            (ArrayMut::Inline(array), Item::Value(value)) => {
+                array.replace_formatted(index, value);
+            }
+            (ArrayMut::Tables(tables), Item::Table(table)) => {
+                let existing =
+                    tables
+                        .get_mut(index)
+                        .ok_or_else(|| EditError::IndexOutOfBounds {
+                            path: path.clone(),
+                            index,
+                            len,
+                        })?;
+                *existing = table;
+            }
+            _ => return Err(EditError::NotATableElement(path.clone())),
+        }
+        *self = edited;
+        Ok(())
+    }
+
     fn ensure_editable(&self) -> Result<(), EditError> {
         match self.line_ending {
             LineEnding::Mixed(_) => Err(EditError::MixedLineEndings),
@@ -987,7 +1057,7 @@ impl EdgeDecor {
                 .get(index)
                 .map_or_else(String::new, |value| raw(value.decor().suffix(), ""))
         };
-        let first_prefix = prefix(0, "");
+        let first_prefix = without_comment_prefix(&prefix(0, ""));
         let interior_prefix = if array.len() >= 2 {
             without_comment_prefix(&prefix(1, " "))
         } else if first_prefix.contains('\n') {

@@ -1,0 +1,9 @@
+---
+source: crates/planeui-core/tests/rule_ops.rs
+assertion_line: 82
+expression: "TextDiff::from_lines(*source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -10,2 +10,3 @@
+     { if = 'test-not %{app-name} ~= Terminal || false', run = 'layout floating' },
++    { if = 'test %{app-bundle-id} = com.foo', run = "layout floating", check-further-callbacks = true },
+ ]
