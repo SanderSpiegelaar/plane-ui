@@ -126,6 +126,8 @@ pub struct ConfigModel {
     /// The text of the latest valid state: on disk, or queued to be. Undo history is recorded
     /// against it, so an invalid in-memory edit never becomes an undo target.
     committed: String,
+    /// The text last known to be on disk, which `stamp` describes.
+    on_disk: String,
     history: History,
     stamp: DiskStamp,
     last_result: SaveStatus,
@@ -157,7 +159,8 @@ impl ConfigModel {
             doc,
             view,
             report,
-            committed: loaded.text,
+            committed: loaded.text.clone(),
+            on_disk: loaded.text,
             history: History::new(),
             stamp: loaded.stamp,
             last_result: SaveStatus::Idle,
@@ -359,10 +362,15 @@ impl ConfigModel {
         let stamp = self.stamp.clone();
         let Write { text, label } = write;
         let task = cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_spawn(async move { apply(&context, &stamp, &text) })
+            let (text, outcome) = cx
+                .background_spawn(async move {
+                    let outcome = apply(&context, &stamp, &text);
+                    (text, outcome)
+                })
                 .await;
-            log_if_released(this.update(cx, |this, cx| this.finish_write(label, outcome, cx)));
+            log_if_released(
+                this.update(cx, |this, cx| this.finish_write(label, &text, outcome, cx)),
+            );
         });
         self.queue = WriteQueue::Busy {
             _task: task,
@@ -370,7 +378,13 @@ impl ConfigModel {
         };
     }
 
-    fn finish_write(&mut self, label: String, outcome: ApplyOutcome, cx: &mut Context<Self>) {
+    fn finish_write(
+        &mut self,
+        label: String,
+        text: &str,
+        outcome: ApplyOutcome,
+        cx: &mut Context<Self>,
+    ) {
         let next = match mem::take(&mut self.queue) {
             WriteQueue::Busy { next, .. } => next,
             WriteQueue::Idle => None,
@@ -387,6 +401,7 @@ impl ConfigModel {
             }
             ApplyOutcome::Written { reload, new_stamp } => {
                 self.stamp = new_stamp;
+                text.clone_into(&mut self.on_disk);
                 if let Some(state) = AerospaceState::after_reload(&reload) {
                     self.aerospace.state = state;
                 }
@@ -405,8 +420,12 @@ impl ConfigModel {
             }
             ApplyOutcome::WriteFailed(error) => self.last_result = not_written(error.to_string()),
         }
-        if let Some(next) = next {
-            self.start_write(next, cx);
+        match next {
+            Some(next) => self.start_write(next, cx),
+            // Nothing was written, so the disk text is the latest valid state again; committing
+            // the same value after fixing the cause must count as a change.
+            None if self.on_disk != text => self.committed.clone_from(&self.on_disk),
+            None => {}
         }
         cx.notify();
     }
@@ -420,9 +439,14 @@ impl ConfigModel {
         match ConfigDoc::parse(&current.text) {
             Ok(doc) => {
                 self.show(doc);
-                self.committed = current.text;
+                self.committed.clone_from(&current.text);
                 self.stamp = current.stamp;
+                // The external edit is a change like any other, so undo reverts it first and
+                // redo can bring it back instead of losing it.
+                let previous = mem::replace(&mut self.on_disk, current.text.clone());
                 self.history.note_external_change();
+                self.history
+                    .record(previous, current.text, "Edit made outside PlaneUI");
                 cx.emit(ConfigEvent::ReloadedFromDisk { discarded });
             }
             Err(error) => {
@@ -660,5 +684,56 @@ mod tests {
             model.read_with(cx, |model, _| model.status()),
             SaveStatus::Error(message) if message.starts_with("Not saved:")
         ));
+    }
+
+    #[gpui_kit::test]
+    fn undo_and_redo_across_an_external_edit_keep_it_in_history(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let model = fixture.model(cx);
+        set_padding(&model, 1, cx);
+        cx.run_until_parked();
+        let edited = fixture.disk();
+
+        let external = "accordion-padding = 99\n";
+        fixture.write_disk(external);
+        model.update(cx, ConfigModel::check_disk);
+        cx.run_until_parked();
+
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            edited,
+            "undo reverts the external edit first"
+        );
+        model.update(cx, ConfigModel::redo);
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            external,
+            "redo brings the external edit back"
+        );
+        model.update(cx, ConfigModel::undo);
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_write_can_be_retried_with_the_same_value(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        fixture.block_snapshots();
+        let model = fixture.model(cx);
+        set_padding(&model, 4, cx);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
+
+        fixture.unblock_snapshots();
+        set_padding(&model, 4, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "# Gaps between windows\naccordion-padding = 4 # px\n"
+        );
     }
 }

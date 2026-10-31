@@ -79,6 +79,10 @@ impl Fixture {
     pub fn block_snapshots(&self) {
         fs::write(&self.snapshot_dir, "not a directory").unwrap();
     }
+
+    pub fn unblock_snapshots(&self) {
+        fs::remove_file(&self.snapshot_dir).unwrap();
+    }
 }
 
 pub fn set_padding(model: &Entity<ConfigModel>, padding: i64, cx: &mut TestAppContext) {
