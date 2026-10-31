@@ -1,0 +1,81 @@
+version: 2.1
+
+commands:
+  install-rust:
+    steps:
+      # rustup reads rust-toolchain.toml, so the pinned toolchain installs on first cargo call.
+      - run:
+          name: Install rustup
+          command: |
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo 'source "$HOME/.cargo/env"' >> "$BASH_ENV"
+      - run: rustup show active-toolchain || rustup toolchain install
+
+  restore-cargo-cache:
+    parameters:
+      key:
+        type: string
+    steps:
+      - restore_cache:
+          keys:
+            - << parameters.key >>-v1-{{ checksum "rust-toolchain.toml" }}-{{ checksum "Cargo.lock" }}
+            - << parameters.key >>-v1-{{ checksum "rust-toolchain.toml" }}-
+
+  save-cargo-cache:
+    parameters:
+      key:
+        type: string
+    steps:
+      - save_cache:
+          key: << parameters.key >>-v1-{{ checksum "rust-toolchain.toml" }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/bin
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - target
+
+jobs:
+  core-linux:
+    docker:
+      - image: cimg/base:current
+    environment:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: -D warnings
+    steps:
+      - checkout
+      - install-rust
+      - restore-cargo-cache:
+          key: core-linux
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p planeui-core --all-targets --locked -- -D warnings
+      - run: cargo test -p planeui-core --locked
+      - save-cargo-cache:
+          key: core-linux
+
+  workspace-macos:
+    macos:
+      xcode: 27.1.0
+    resource_class: m4pro.medium
+    environment:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: -D warnings
+    steps:
+      - checkout
+      - install-rust
+      - restore-cargo-cache:
+          key: workspace-macos
+      - run:
+          name: Install cargo-deny
+          command: command -v cargo-deny || cargo install cargo-deny --locked
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo deny check
+      - save-cargo-cache:
+          key: workspace-macos
+
+workflows:
+  ci:
+    jobs:
+      - core-linux
+      - workspace-macos
