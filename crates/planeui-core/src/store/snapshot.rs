@@ -379,9 +379,27 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// Lines added and removed going from `old` to `new`, for the snapshots list.
+#[must_use]
+pub fn line_diff_stats(old: &str, new: &str) -> (usize, usize) {
+    similar::TextDiff::from_lines(old, new)
+        .iter_all_changes()
+        .fold((0, 0), |(added, removed), change| match change.tag() {
+            similar::ChangeTag::Insert => (added + 1, removed),
+            similar::ChangeTag::Delete => (added, removed + 1),
+            similar::ChangeTag::Equal => (added, removed),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_diff_stats_counts_changed_lines() {
+        assert_eq!(line_diff_stats("a\nb\nc\n", "a\nB\nc\nd\n"), (2, 1));
+        assert_eq!(line_diff_stats("same\n", "same\n"), (0, 0));
+    }
 
     #[test]
     fn civil_dates_match_known_day_counts() {
