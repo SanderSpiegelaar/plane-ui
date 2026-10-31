@@ -1,0 +1,17 @@
+[
+  {
+    "monitor-id" : 1,
+    "monitor-is-main" : false,
+    "monitor-name" : "LG ULTRAGEAR+ (1)"
+  },
+  {
+    "monitor-id" : 2,
+    "monitor-is-main" : true,
+    "monitor-name" : "Built-in Retina Display"
+  },
+  {
+    "monitor-id" : 3,
+    "monitor-is-main" : false,
+    "monitor-name" : "LG ULTRAGEAR+ (2)"
+  }
+]

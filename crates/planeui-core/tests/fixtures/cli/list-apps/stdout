@@ -1,0 +1,97 @@
+[
+  {
+    "app-bundle-id" : "com.todesktop.230313mzl4w4u92",
+    "app-name" : "Cursor",
+    "app-pid" : 30192
+  },
+  {
+    "app-bundle-id" : "net.imput.helium",
+    "app-name" : "Helium",
+    "app-pid" : 4635
+  },
+  {
+    "app-bundle-id" : "com.apple.finder",
+    "app-name" : "Finder",
+    "app-pid" : 71924
+  },
+  {
+    "app-bundle-id" : "com.tokentracker.bar",
+    "app-name" : "TokenTracker",
+    "app-pid" : 856
+  },
+  {
+    "app-bundle-id" : "com.apple.accessibility.universalAccessAuthWarn",
+    "app-name" : "universalAccessAuthWarn",
+    "app-pid" : 72711
+  },
+  {
+    "app-bundle-id" : "com.fasttracksoftware.adminbyrequest",
+    "app-name" : "Admin By Request",
+    "app-pid" : 942
+  },
+  {
+    "app-bundle-id" : "com.anysphere.sand",
+    "app-name" : "Grok Bot",
+    "app-pid" : 7008
+  },
+  {
+    "app-bundle-id" : "com.t3tools.t3code",
+    "app-name" : "T3 Code (Nightly)",
+    "app-pid" : 34395
+  },
+  {
+    "app-bundle-id" : "com.apple.systempreferences",
+    "app-name" : "System Settings",
+    "app-pid" : 93239
+  },
+  {
+    "app-bundle-id" : "com.mitchellh.ghostty",
+    "app-name" : "Ghostty",
+    "app-pid" : 13014
+  },
+  {
+    "app-bundle-id" : "com.apple.coreservices.uiagent",
+    "app-name" : "CoreServicesUIAgent",
+    "app-pid" : 724
+  },
+  {
+    "app-bundle-id" : "com.agentskills.desktop",
+    "app-name" : "skills-manager",
+    "app-pid" : 9855
+  },
+  {
+    "app-bundle-id" : "app.vibeisland.macos",
+    "app-name" : "Vibe Island",
+    "app-pid" : 33377
+  },
+  {
+    "app-bundle-id" : "com.apple.UserNotificationCenter",
+    "app-name" : "UserNotificationCenter",
+    "app-pid" : 32693
+  },
+  {
+    "app-bundle-id" : "com.FluidApp.app",
+    "app-name" : "FluidVoice",
+    "app-pid" : 997
+  },
+  {
+    "app-bundle-id" : "com.vorssaint.utils",
+    "app-name" : "Vorssaint",
+    "app-pid" : 962
+  },
+  {
+    "app-bundle-id" : "com.apple.LocalAuthentication.UIAgent",
+    "app-name" : "coreautha",
+    "app-pid" : 1287
+  },
+  {
+    "app-bundle-id" : "com.stonerl.Thaw",
+    "app-name" : "Thaw",
+    "app-pid" : 882
+  },
+  {
+    "app-bundle-id" : "org.hammerspoon.Hammerspoon",
+    "app-name" : "Hammerspoon",
+    "app-pid" : 9510
+  }
+]
