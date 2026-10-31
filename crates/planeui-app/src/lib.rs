@@ -1,5 +1,7 @@
 //! PlaneUI's window, views and wiring. Domain logic lives in `planeui-core`.
 
+mod binding_draft;
+mod binding_form;
 pub mod config_model;
 pub mod debug_control;
 pub mod fields;
@@ -44,6 +46,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-z", Redo, None),
         KeyBinding::new("up", PreviousSection, Some(SECTIONS_CONTEXT)),
         KeyBinding::new("down", NextSection, Some(SECTIONS_CONTEXT)),
+        KeyBinding::new(
+            "enter",
+            binding_form::CommitBinding,
+            Some(binding_form::FORM_CONTEXT),
+        ),
+        KeyBinding::new(
+            "escape",
+            binding_form::CancelBinding,
+            Some(binding_form::FORM_CONTEXT),
+        ),
     ]);
 }
 

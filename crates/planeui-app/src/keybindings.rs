@@ -10,15 +10,18 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Action, Context, Entity, InteractiveElement as _, IntoElement, Keystroke, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    Action, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Keystroke,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div,
 };
-use planeui_core::bindings::{duplicate_binding, remove_binding};
+use planeui_core::bindings::{duplicate_binding, remove_binding, upsert_binding};
 use planeui_core::commands::{Command, ParsedScript};
 use planeui_core::config_doc::{ConfigDoc, KeyPath};
 use planeui_core::config_view::{Binding, Mode};
 use planeui_core::validate::check_chord_available;
 
+use crate::binding_draft::{BindingDraft, CommandDraft};
+use crate::binding_form::{BindingForm, FormEvent};
 use crate::config_model::{ConfigModel, SaveStatus};
 
 #[derive(Action, Debug, Clone, PartialEq, Eq)]
@@ -41,6 +44,8 @@ pub struct KeybindingsView {
     model: Entity<ConfigModel>,
     selected_mode: String,
     error: Option<SharedString>,
+    form: Option<Entity<BindingForm>>,
+    form_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -74,6 +79,8 @@ impl KeybindingsView {
                 .any(|mode| mode.name.value == this.selected_mode)
             {
                 "main".clone_into(&mut this.selected_mode);
+                this.form = None;
+                this.form_subscription = None;
             }
             if let SaveStatus::Error(message) = model.status()
                 && this.error.as_deref() != Some(message.as_str())
@@ -86,7 +93,91 @@ impl KeybindingsView {
             model,
             selected_mode: "main".to_owned(),
             error: None,
+            form: None,
+            form_subscription: None,
             _subscriptions: vec![subscription],
+        }
+    }
+
+    fn open_form(
+        &mut self,
+        binding: Option<&Binding>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = match binding {
+            Some(Binding {
+                raw_key,
+                chord: Ok(chord),
+                script: ParsedScript::Editable { commands, .. },
+                ..
+            }) => BindingDraft {
+                original_raw_key: Some(raw_key.clone()),
+                modifiers: chord.modifiers.as_slice().to_vec(),
+                key: Some(chord.key.as_str().to_owned()),
+                commands: match commands.iter().map(CommandDraft::new).collect() {
+                    Ok(commands) => commands,
+                    Err(error) => {
+                        self.show_error(error.0, window, cx);
+                        return;
+                    }
+                },
+            },
+            Some(_) => return,
+            None => BindingDraft::default(),
+        };
+        let model = self.model.clone();
+        let mode = self.selected_mode.clone();
+        let form = cx.new(|cx| BindingForm::new(model, mode.clone(), draft, window, cx));
+        self.form_subscription = Some(cx.subscribe_in(
+            &form,
+            window,
+            move |this, _, event: &FormEvent, window, cx| match event {
+                FormEvent::Cancel => {
+                    this.form = None;
+                    this.form_subscription = None;
+                    cx.notify();
+                }
+                FormEvent::Commit(draft) => {
+                    this.apply_draft(draft, &mode, window, cx);
+                }
+            },
+        ));
+        self.error = None;
+        self.form = Some(form);
+        cx.notify();
+    }
+
+    fn apply_draft(
+        &mut self,
+        draft: &BindingDraft,
+        mode: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let model = self.model.read(cx);
+        let (chord, commands) = match draft.to_commit(model.view(), mode) {
+            Ok(commit) => commit,
+            Err(error) => {
+                self.show_error(error.0, window, cx);
+                return;
+            }
+        };
+        let mut doc = model.doc().clone();
+        if let Err(error) = upsert_binding(
+            &mut doc,
+            mode,
+            draft.original_raw_key.as_deref(),
+            &chord,
+            &commands,
+        ) {
+            self.show_error(error.to_string(), window, cx);
+            return;
+        }
+        self.commit(doc, "Apply binding".into(), window, cx);
+        if self.error.is_none() {
+            self.form = None;
+            self.form_subscription = None;
         }
     }
 
@@ -255,6 +346,8 @@ impl KeybindingsView {
             },
         );
         let duplicate = self.render_duplicate(mode, binding, index, cx);
+        let editable = reason.is_none();
+        let edit_binding = binding.clone();
         let source = mode.name.value.clone();
         let raw_key = binding.raw_key.clone();
         ListItem::new(("binding", index))
@@ -288,6 +381,13 @@ impl KeybindingsView {
                                     .child(binding.inline_comment.clone().unwrap_or_default()),
                             )
                             .child(duplicate)
+                            .when(editable, |row| {
+                                row.child(Button::new(("edit", index)).label("Edit").on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.open_form(Some(&edit_binding), window, cx);
+                                    }),
+                                ))
+                            })
                             .child(Button::new(("delete", index)).label("Delete").on_click(
                                 cx.listener(move |this, _, window, cx| {
                                     this.apply_action(
@@ -353,15 +453,27 @@ impl Render for KeybindingsView {
             .on_click(cx.listener(move |this, index: &usize, _, cx| {
                 if let Some(name) = names.get(*index) {
                     this.selected_mode.clone_from(name);
+                    this.form = None;
+                    this.form_subscription = None;
                     cx.notify();
                 }
             }));
-        // PUI-036 adds the binding form between the mode tabs and these rows.
+        let original = self
+            .form
+            .as_ref()
+            .and_then(|form| form.read(cx).draft.original_raw_key.clone());
         let rows = mode.as_ref().map(|mode| {
             mode.bindings
                 .iter()
                 .enumerate()
-                .map(|(index, binding)| self.render_binding(mode, binding, index, cx))
+                .map(|(index, binding)| {
+                    if original.as_deref() == Some(binding.raw_key.as_str()) {
+                        div().children(self.form.clone()).into_any_element()
+                    } else {
+                        self.render_binding(mode, binding, index, cx)
+                            .into_any_element()
+                    }
+                })
                 .collect::<Vec<_>>()
         });
         let empty = rows.as_ref().is_none_or(Vec::is_empty);
@@ -372,6 +484,13 @@ impl Render for KeybindingsView {
             .min_h_0()
             .gap_3()
             .child(tabs)
+            .when(mode.as_ref().is_some_and(|mode| mode.editable), |view| {
+                view.child(
+                    Button::new("add-binding").label("Add binding").on_click(
+                        cx.listener(|this, _, window, cx| this.open_form(None, window, cx)),
+                    ),
+                )
+            })
             .when_some(self.error.clone(), |view, error| {
                 view.child(Alert::error("binding-error", error))
             })
@@ -381,7 +500,10 @@ impl Render for KeybindingsView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .when(empty, |list| list.child("No bindings in this mode."))
+                    .when(original.is_none(), |list| list.children(self.form.clone()))
+                    .when(empty && self.form.is_none(), |list| {
+                        list.child("No bindings in this mode.")
+                    })
                     .children(rows.into_iter().flatten()),
             )
     }
@@ -389,7 +511,10 @@ impl Render for KeybindingsView {
 
 #[cfg(test)]
 mod tests {
+    use crate::binding_form::{CancelBinding, CommitBinding};
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, TestAppContext};
+    use planeui_core::keys::Modifier;
 
     use super::*;
     use crate::test_support::{Fixture, in_window, open_window};
@@ -591,5 +716,236 @@ mod tests {
 
         assert_eq!(fixture.disk(), CONFIG);
         assert!(view.read_with(cx, |view, _| view.error.is_some()));
+    }
+
+    fn draft_form(
+        cx: &mut TestAppContext,
+        window: AnyWindowHandle,
+        view: &Entity<KeybindingsView>,
+        edit: bool,
+    ) -> Entity<BindingForm> {
+        in_window(cx, window, |window, cx| {
+            view.update(cx, |view, cx| {
+                if edit {
+                    view.selected_mode = "service".into();
+                }
+                let binding = edit.then(|| {
+                    view.model
+                        .read(cx)
+                        .view()
+                        .modes
+                        .iter()
+                        .find(|mode| mode.name.value == "service")
+                        .unwrap()
+                        .bindings
+                        .first()
+                        .unwrap()
+                        .clone()
+                });
+                view.open_form(binding.as_ref(), window, cx);
+                view.form.clone().unwrap()
+            })
+        })
+    }
+
+    fn set_draft(cx: &mut TestAppContext, form: &Entity<BindingForm>, key: &str, command: &str) {
+        form.update(cx, |form, cx| {
+            form.draft.key = Some(key.into());
+            form.draft.modifiers = vec![Modifier::Shift, Modifier::Alt];
+            form.draft.commands =
+                vec![CommandDraft::new(&Command::parse(command).unwrap()).unwrap()];
+            cx.notify();
+        });
+    }
+
+    #[gpui_kit::test]
+    fn focused_form_enter_adds_one_canonical_line(cx: &mut TestAppContext) {
+        let original = "[mode.main.binding]\n";
+        let fixture = Fixture::new(original);
+        let (window, view, _) = open_view(cx, &fixture);
+        let form = draft_form(cx, window, &view, false);
+        set_draft(cx, &form, "p", "workspace P");
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original);
+        in_window(cx, window, |window, cx| window.press("enter", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[mode.main.binding]\nalt-shift-p = \"workspace P\"\n"
+        );
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+        assert_eq!(fixture.snapshots(), vec![original]);
+        assert!(view.read_with(cx, |view, _| view.form.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn focused_commit_action_preserves_existing_modifier_order(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(CONFIG);
+        let (window, view, _) = open_view(cx, &fixture);
+        let form = draft_form(cx, window, &view, true);
+        set_draft(cx, &form, "h", "workspace P");
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(CommitBinding), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            CONFIG.replace(
+                "shift-alt-h = 'focus right'",
+                "shift-alt-h = \"workspace P\""
+            )
+        );
+    }
+
+    #[gpui_kit::test]
+    fn conflicting_form_action_never_writes_and_names_binding(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(CONFIG);
+        let (window, view, _) = open_view(cx, &fixture);
+        let form = draft_form(cx, window, &view, false);
+        set_draft(cx, &form, "h", "workspace P");
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("draft-error").label(),
+                Some("alt-shift-h is already bound to `focus up` in main")
+            );
+        });
+        in_window(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(CommitBinding), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), CONFIG);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+        assert_eq!(fixture.snapshots(), Vec::<String>::new());
+        assert_eq!(
+            view.read_with(cx, |view, cx| form
+                .read(cx)
+                .draft
+                .to_commit(view.model.read(cx).view(), "main")
+                .unwrap_err()
+                .0),
+            "alt-shift-h is already bound to `focus up` in main"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn escape_and_cancel_action_discard_draft_without_writing(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(CONFIG);
+        let (window, view, _) = open_view(cx, &fixture);
+        let form = draft_form(cx, window, &view, false);
+        set_draft(cx, &form, "p", "workspace P");
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| window.press("escape", cx));
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.form.is_none()));
+        let _form = draft_form(cx, window, &view, false);
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.dispatch_action(Box::new(CancelBinding), cx);
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.form.is_none()));
+        assert_eq!(fixture.disk(), CONFIG);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn escape_cancels_while_an_argument_input_has_focus(cx: &mut TestAppContext) {
+        let original = "[mode.main.binding]\n[mode.service.binding]\nshift-alt-h = 'workspace P'\n";
+        let fixture = Fixture::new(original);
+        let (window, view, _) = open_view(cx, &fixture);
+        let _form = draft_form(cx, window, &view, true);
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            for _ in 0..7 {
+                window.press("tab", cx);
+            }
+            window.input("Q", cx);
+            window.press("escape", cx);
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.form.is_none()));
+        assert_eq!(fixture.disk(), original);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn full_binding_flow_is_keyboard_operable_in_tab_order(cx: &mut TestAppContext) {
+        let fixture = Fixture::new("[mode.main.binding]\n");
+        let (window, view, _) = open_view(cx, &fixture);
+        let form = draft_form(cx, window, &view, false);
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            for _ in 0..4 {
+                window.press("tab", cx);
+            }
+            window.press("space", cx);
+            window.press("shift-tab", cx);
+            window.press("shift-tab", cx);
+            window.press("space", cx);
+        });
+        assert_eq!(
+            form.read_with(cx, |form, _| form.draft.modifiers.clone()),
+            vec![Modifier::Shift, Modifier::Alt]
+        );
+        in_window(cx, window, |window, cx| {
+            for _ in 0..3 {
+                window.press("tab", cx);
+            }
+            window.press("enter", cx);
+            window.input("p", cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            let mut matches = planeui_core::keys::KEY_NAMES
+                .iter()
+                .copied()
+                .filter(|name| name.to_lowercase().contains('p'))
+                .collect::<Vec<_>>();
+            matches.sort_unstable();
+            for _ in 0..matches.iter().position(|name| *name == "p").unwrap() {
+                window.press("down", cx);
+            }
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            form.read_with(cx, |form, _| form.draft.key.clone()),
+            Some("p".into())
+        );
+        in_window(cx, window, |window, cx| {
+            window.press("tab", cx);
+            window.press("space", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(form.read_with(cx, |form, _| form.draft.commands.len()), 1);
+        assert_eq!(fixture.disk(), "[mode.main.binding]\n");
+        in_window(cx, window, |window, cx| {
+            window.press("enter", cx);
+            window.input("Workspace", cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.press("tab", cx);
+            window.press("cmd-a", cx);
+            window.input("P", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), "[mode.main.binding]\n");
+        in_window(cx, window, |window, cx| {
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[mode.main.binding]\nalt-shift-p = \"workspace P\"\n"
+        );
+        assert_eq!(fixture.aerospace.reload_count(), 1);
     }
 }
