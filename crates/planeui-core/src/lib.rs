@@ -5,6 +5,7 @@ pub mod aerospace;
 pub mod commands;
 pub mod config_doc;
 pub mod config_view;
+pub mod history;
 pub mod keys;
 pub mod store;
 pub mod validate;
