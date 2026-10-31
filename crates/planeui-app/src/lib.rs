@@ -1,6 +1,8 @@
 //! PlaneUI's window, views and wiring. Domain logic lives in `planeui-core`.
 
 pub mod config_model;
+pub mod debug_control;
+pub mod fields;
 pub mod startup;
 #[cfg(test)]
 mod test_support;

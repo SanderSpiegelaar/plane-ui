@@ -5,7 +5,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_kit::{AppContext as _, Entity, TestAppContext};
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Point, Render, TestAppContext,
+    Window, WindowBounds, WindowOptions, px, size,
+};
 use planeui_core::aerospace::FakeAerospace;
 use planeui_core::apply::ApplyContext;
 use planeui_core::config_doc::KeyPath;
@@ -86,4 +89,37 @@ pub fn set_padding(model: &Entity<ConfigModel>, padding: i64, cx: &mut TestAppCo
             })
             .unwrap();
     });
+}
+
+/// Opens a window holding the view `build` makes, with gpui-kit and PlaneUI's key bindings set
+/// up.
+pub fn open_window<V: Render>(
+    cx: &mut TestAppContext,
+    build: impl FnOnce(&mut Window, &mut Context<V>) -> V,
+) -> (AnyWindowHandle, Entity<V>) {
+    let (window, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::bind_keys(cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: Point::default(),
+                size: size(px(960.), px(640.)),
+            })),
+            ..WindowOptions::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| build(window, cx))).unwrap()
+    });
+    // GPUI delivers focus and blur only to an active window.
+    in_window(cx, window, |window, _| window.activate_window());
+    cx.run_until_parked();
+    (window, view)
+}
+
+pub fn in_window<R>(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    update: impl FnOnce(&mut Window, &mut App) -> R,
+) -> R {
+    cx.update_window(window, |_, window, cx| update(window, cx))
+        .unwrap()
 }

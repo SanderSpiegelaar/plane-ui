@@ -16,6 +16,7 @@ use planeui_core::apply::ApplyContext;
 use planeui_core::store::{ConfigStore, Loaded, PathEnv, SnapshotStore, resolve_config_path};
 
 use crate::config_model::ConfigModel;
+use crate::debug_control::AccordionPaddingControl;
 use crate::{Redo, Undo};
 
 /// Everything the editor starts from.
@@ -88,7 +89,10 @@ impl Aerospace for MissingAerospace {
 enum Screen {
     Loading,
     Failed(SharedString),
-    Ready(Entity<ConfigModel>),
+    Ready {
+        model: Entity<ConfigModel>,
+        control: Entity<AccordionPaddingControl>,
+    },
 }
 
 /// The main window's root view.
@@ -134,7 +138,7 @@ impl MainWindow {
     fn open(
         &mut self,
         session: anyhow::Result<Session>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.screen = match session.and_then(|session| {
@@ -144,7 +148,8 @@ impl MainWindow {
             Ok(model) => {
                 let model = cx.new(|_| model);
                 model.update(cx, ConfigModel::refresh_aerospace);
-                Screen::Ready(model)
+                let control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
+                Screen::Ready { model, control }
             }
             Err(error) => {
                 log::error!("{error:#}");
@@ -159,7 +164,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
         update: impl FnOnce(&mut ConfigModel, &mut Context<ConfigModel>),
     ) {
-        if let Screen::Ready(model) = &self.screen {
+        if let Screen::Ready { model, .. } = &self.screen {
             model.update(cx, update);
         }
     }
@@ -183,10 +188,7 @@ impl Render for MainWindow {
                         .text_color(theme.muted_foreground)
                         .child(message.clone()),
                 ),
-            Screen::Ready(model) => div().text_color(theme.muted_foreground).child(format!(
-                "Editing {}",
-                model.read(cx).display_path().display()
-            )),
+            Screen::Ready { control, .. } => div().child(control.clone()),
         };
         div()
             .track_focus(&self.focus_handle)
