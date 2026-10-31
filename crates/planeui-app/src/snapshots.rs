@@ -4,7 +4,6 @@
 use std::fmt;
 use std::time::SystemTime;
 
-use anyhow::Context as _;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_kit::component::{ActiveTheme as _, IndexPath, WindowExt as _, h_flex, v_flex};
@@ -14,11 +13,9 @@ use gpui_kit::{
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, TestSupportExt as _,
     Window, div,
 };
-use planeui_core::config_doc::ConfigDoc;
 use planeui_core::store::{SnapshotError, SnapshotId, SnapshotStore, line_diff_stats};
-use planeui_core::validate::validate_text;
 
-use crate::config_model::ConfigModel;
+use crate::config_model::{ConfigEvent, ConfigModel};
 use crate::shell::{TimeFormat, display_time};
 
 /// One listed snapshot.
@@ -48,22 +45,6 @@ fn list_snapshots(store: &SnapshotStore, current: &str) -> Result<Vec<SnapshotRo
             }
         })
         .collect())
-}
-
-/// The snapshot's document, if it can be written as it is. Blocks on the file system.
-fn read_restorable(store: &SnapshotStore, id: &SnapshotId) -> anyhow::Result<ConfigDoc> {
-    let bytes = store.read(id)?;
-    let text = String::from_utf8(bytes).context("the snapshot is not valid UTF-8")?;
-    match validate_text(&text) {
-        Ok((doc, _, report)) if !report.blocks_write() => Ok(doc),
-        Ok((_, _, report)) | Err(report) => {
-            let reason = report
-                .errors()
-                .next()
-                .map_or_else(|| "it has errors".to_owned(), |issue| issue.message.clone());
-            anyhow::bail!("the snapshot cannot be written back: {reason}")
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -159,6 +140,12 @@ impl SnapshotsView {
         let subscriptions = vec![
             // Every write adds a snapshot and changes what the others are diffed against.
             cx.observe(&model, |this, _, cx| this.refresh(cx)),
+            cx.subscribe(&model, |this, _, event: &ConfigEvent, cx| {
+                if let ConfigEvent::RestoreFailed { message } = event {
+                    this.restore_error = Some(message.clone().into());
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&list, window, |this, _, event, window, cx| {
                 if let ListEvent::Confirm(index) = event {
                     this.confirm_restore(index.row, window, cx);
@@ -245,35 +232,12 @@ impl SnapshotsView {
     fn restore(&mut self, row: SnapshotRow, cx: &mut Context<Self>) {
         self.restore_error = None;
         cx.notify();
-        let store = self.model.read(cx).snapshots().clone();
         let label = format!(
             "Restored snapshot from {}",
             display_time(row.taken_at, TimeFormat::DateAndClock)
         );
-        // The commit must not depend on this view: navigating away drops it, and a confirmed
-        // restore still has to land. The task holds the model and is detached; the view is only
-        // told about a failure if it still exists.
-        let model = self.model.clone();
-        cx.spawn(async move |this, cx| {
-            let id = row.id;
-            let read = cx
-                .background_spawn(async move { read_restorable(&store, &id) })
-                .await;
-            match read {
-                Ok(doc) => model.update(cx, |model, cx| model.commit(doc, label, cx)),
-                Err(error) => {
-                    log::error!("could not restore: {error:#}");
-                    let shown = this.update(cx, |this, cx| {
-                        this.restore_error = Some(format!("{error:#}").into());
-                        cx.notify();
-                    });
-                    if let Err(error) = shown {
-                        log::debug!("the snapshots screen closed before showing it: {error}");
-                    }
-                }
-            }
-        })
-        .detach();
+        self.model
+            .update(cx, |model, cx| model.restore_snapshot(row.id, label, cx));
     }
 }
 
@@ -525,5 +489,49 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(fixture.disk(), V1);
+    }
+
+    #[gpui_kit::test]
+    fn the_last_confirmed_restore_wins(cx: &mut TestAppContext) {
+        let (fixture, model) = with_history(cx);
+        let (_window, view) = open_view(cx, &model);
+        let listed = rows(cx, &view);
+        let (newest, oldest) = (
+            listed.first().cloned().unwrap(),
+            listed.last().cloned().unwrap(),
+        );
+
+        view.update(cx, |view, cx| view.restore(oldest, cx));
+        view.update(cx, |view, cx| view.restore(newest, cx));
+        cx.run_until_parked();
+
+        assert_eq!(fixture.disk(), V2);
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_restore_is_reported_after_the_screen_closes(cx: &mut TestAppContext) {
+        let (fixture, model) = with_history(cx);
+        let (window, view) = open_view(cx, &model);
+        let oldest = rows(cx, &view).last().cloned().unwrap();
+        let failures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = failures.clone();
+        cx.update(|cx| {
+            cx.subscribe(&model, move |_, event: &ConfigEvent, _| {
+                if let ConfigEvent::RestoreFailed { message } = event {
+                    sink.borrow_mut().push(message.clone());
+                }
+            })
+            .detach();
+        });
+        let directory = model.read_with(cx, |model, _| model.snapshots().dir().to_path_buf());
+        std::fs::remove_dir_all(directory).unwrap();
+
+        view.update(cx, |view, cx| view.restore(oldest, cx));
+        in_window(cx, window, |window, _| window.remove_window());
+        drop(view);
+        cx.run_until_parked();
+
+        assert_eq!(fixture.disk(), V3);
+        assert_eq!(failures.borrow().len(), 1, "the shell can still show it");
     }
 }

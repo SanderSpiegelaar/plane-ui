@@ -406,6 +406,9 @@ fn notification(event: &ConfigEvent) -> Notification {
             };
             Notification::info(message).title("Reloaded from disk")
         }
+        ConfigEvent::RestoreFailed { message } => {
+            Notification::error(message.clone()).title("Snapshot not restored")
+        }
     }
 }
 

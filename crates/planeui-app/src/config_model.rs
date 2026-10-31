@@ -5,13 +5,15 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use anyhow::Context as _;
 use gpui_kit::{AppContext as _, Context, EventEmitter, Task};
 use planeui_core::aerospace::{AerospaceVersion, CliError, ReloadMessage, ReloadOutcome};
 use planeui_core::apply::{ApplyContext, ApplyOutcome, apply};
 use planeui_core::config_doc::{ConfigDoc, EditError, ParseError};
 use planeui_core::config_view::ConfigView;
 use planeui_core::history::{EntryId, History, HistoryStep};
-use planeui_core::store::{DiskStamp, Loaded, SnapshotStore};
+use planeui_core::store::{DiskStamp, Loaded, SnapshotId, SnapshotStore};
+use planeui_core::validate::validate_text;
 use planeui_core::validate::{ValidationReport, validate};
 
 /// What happened to the latest change, for the status bar and the reload-error banner.
@@ -95,6 +97,11 @@ pub enum ConfigEvent {
         /// The label of the latest change that was dropped instead of written over the edit.
         discarded: Option<String>,
     },
+    /// A snapshot restore could not be read or would not be valid; nothing was written.
+    RestoreFailed {
+        /// Why, for the user.
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -139,6 +146,9 @@ pub struct ConfigModel {
     queue: WriteQueue,
     aerospace_check: Option<Task<()>>,
     disk_check: Option<Task<()>>,
+    /// The latest requested snapshot restore. Replacing it cancels an older request still
+    /// reading, so the last confirmed restore wins.
+    restore: Option<Task<()>>,
 }
 
 impl EventEmitter<ConfigEvent> for ConfigModel {}
@@ -173,6 +183,7 @@ impl ConfigModel {
             queue: WriteQueue::Idle,
             aerospace_check: None,
             disk_check: None,
+            restore: None,
         })
     }
 
@@ -257,6 +268,27 @@ impl ConfigModel {
             self.enqueue(Write { text, label, head }, cx);
         }
         cx.notify();
+    }
+
+    /// Reads snapshot `id` in the background and commits it as a change labelled `label`. It
+    /// lives on the model, not a screen, so leaving the screen does not cancel it; a newer
+    /// request replaces an older one. Failures are emitted as [`ConfigEvent::RestoreFailed`].
+    pub fn restore_snapshot(&mut self, id: SnapshotId, label: String, cx: &mut Context<Self>) {
+        let store = self.context.snapshots.clone();
+        self.restore = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_spawn(async move { read_restorable(&store, &id) })
+                .await;
+            log_if_released(this.update(cx, |this, cx| match read {
+                Ok(doc) => this.commit(doc, label, cx),
+                Err(error) => {
+                    log::error!("could not restore: {error:#}");
+                    cx.emit(ConfigEvent::RestoreFailed {
+                        message: format!("{error:#}"),
+                    });
+                }
+            }));
+        }));
     }
 
     /// Writes the document as it was before the latest change.
@@ -474,6 +506,22 @@ impl ConfigModel {
                     self.display_path.display()
                 ));
             }
+        }
+    }
+}
+
+/// The snapshot's document, if it can be written as it is. Blocks on the file system.
+fn read_restorable(store: &SnapshotStore, id: &SnapshotId) -> anyhow::Result<ConfigDoc> {
+    let bytes = store.read(id)?;
+    let text = String::from_utf8(bytes).context("the snapshot is not valid UTF-8")?;
+    match validate_text(&text) {
+        Ok((doc, _, report)) if !report.blocks_write() => Ok(doc),
+        Ok((_, _, report)) | Err(report) => {
+            let reason = report
+                .errors()
+                .next()
+                .map_or_else(|| "it has errors".to_owned(), |issue| issue.message.clone());
+            anyhow::bail!("the snapshot cannot be written back: {reason}")
         }
     }
 }
