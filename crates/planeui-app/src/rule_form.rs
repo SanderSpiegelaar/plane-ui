@@ -58,6 +58,14 @@ impl ConditionKind {
         }
     }
 
+    fn suggestions_label(self) -> &'static str {
+        match self {
+            Self::App => "Running apps",
+            Self::Workspace => "Workspaces",
+            Self::AppName | Self::Title => self.label(),
+        }
+    }
+
     fn read(condition: &Condition) -> (Self, String) {
         match condition {
             Condition::AppBundleIdIs(value) => (Self::App, value.clone()),
@@ -413,8 +421,8 @@ impl RuleForm {
                     .test_support()
                     .child(
                         Select::new(suggestion)
-                            .placeholder(row.kind.label())
-                            .accessibility_label(row.kind.label()),
+                            .placeholder(row.kind.suggestions_label())
+                            .accessibility_label(row.kind.suggestions_label()),
                     )
             }))
     }
