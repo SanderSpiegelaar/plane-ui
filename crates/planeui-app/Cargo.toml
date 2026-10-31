@@ -28,3 +28,16 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.packager]
+product-name = "PlaneUI"
+identifier = "dev.spiegelaar.planeui"
+binaries = [{ path = "PlaneUI", main = true }]
+formats = ["app"]
+icons = ["../../packaging/icon-512.png", "../../packaging/icon@2x.png"]
+category = "DeveloperTool"
+before-packaging-command = "cargo build --release --locked -p planeui-app"
+
+[package.metadata.packager.macos]
+minimum-system-version = "13.0"
+signing-identity = "-"
