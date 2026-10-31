@@ -1,0 +1,7 @@
+config-version = 2
+gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }
+key-mapping = {preset='qwerty'}
+workspace-to-monitor-force-assignment = { 1 = 'main', 2 = 'secondary', 3 = ['secondary', 'main'], '4' = 'built-in' }
+
+[mode.main]
+binding = { alt-h = 'focus left', alt-l = 'focus right' }

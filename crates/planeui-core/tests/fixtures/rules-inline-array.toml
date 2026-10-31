@@ -1,0 +1,12 @@
+config-version = 2
+
+on-window-detected = [
+    { if.app-id = 'com.apple.finder', run = 'layout floating' },
+    {
+        if.app-id = 'com.google.Chrome',
+        if.window-title-regex-substring = 'Picture in Picture', # TOML 1.1: comments and newlines
+        check-further-callbacks = true,
+        run = ['layout floating', 'move-node-to-workspace 9'],
+    },
+    { if = { app-name-regex-substring = 'slack' }, run = 'move-node-to-workspace 3', },
+]

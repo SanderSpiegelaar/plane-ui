@@ -1,0 +1,14 @@
+config-version = 2
+
+[[on-window-detected]]
+if.app-id = 'com.apple.systempreferences'
+if.app-name-regex-substring = 'settings'
+if.window-title-regex-substring = 'substring'
+if.workspace = 'workspace-name'
+if.during-aerospace-startup = true
+check-further-callbacks = true
+run = ['layout floating', 'move-node-to-workspace S']
+
+[[on-window-detected]]
+if = { app-id = 'org.alacritty' }
+run = 'layout tiling'

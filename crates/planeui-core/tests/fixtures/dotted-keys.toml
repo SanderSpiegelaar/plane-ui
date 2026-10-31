@@ -1,0 +1,12 @@
+config-version = 2
+gaps.inner.horizontal = 10
+gaps.inner.vertical = 10
+gaps.outer.left = 8
+gaps.outer.bottom = 8
+gaps.outer.top = 8
+gaps.outer.right = 8
+key-mapping.preset = 'qwerty'
+focus-follows-mouse.enabled = true
+mode.main.binding.alt-h = 'focus left'
+mode.main.binding.alt-l = 'focus right'
+mode.service.binding.esc = ['reload-config', 'mode main']

@@ -1,0 +1,13 @@
+config-version = 2
+
+[gaps]
+inner.horizontal = [{ monitor.main = 16 }, { monitor."some-pattern" = 32 }, 24]
+inner.vertical = 10
+outer.left = [{ monitor.'built-in' = 0 }, 8]
+outer.right = 8
+outer.top = [
+    { monitor.secondary = 4 },
+    { monitor.2 = 12 },
+    8,
+]
+outer.bottom = 8

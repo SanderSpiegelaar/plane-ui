@@ -1,0 +1,26 @@
+config-version = 2
+
+after-login-command = []
+after-startup-command = [
+    'exec-and-forget borders active_color=0xffe1e3e4 inactive_color=0xff494d64 width=5.0',
+    'exec-and-forget sketchybar',
+]
+exec-on-workspace-change = ['/bin/bash', '-c',
+    'sketchybar --trigger aerospace_workspace_change FOCUSED_WORKSPACE=$AEROSPACE_FOCUSED_WORKSPACE'
+]
+on-focus-changed = ['move-mouse window-lazy-center']
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+
+[exec]
+inherit-env-vars = true
+
+[exec.env-vars]
+PATH = '/opt/homebrew/bin:/opt/homebrew/sbin:${PATH}'
+EDITOR = 'nvim'
+
+[unknown-future-section]
+some-key = 1979-05-27T07:32:00Z
+other = 0xdead_beef
+inf-value = +inf
+nan-value = nan
+time = 07:32
