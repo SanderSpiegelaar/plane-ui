@@ -83,6 +83,26 @@ impl History {
         }
     }
 
+    /// Drops changes that never reached the disk, so undo cannot resurrect them. Afterwards the
+    /// latest undo entry ends at `text` (or the stack is empty). A discarded undo is taken back
+    /// by replaying redo entries; discarded commits are popped.
+    pub fn rewind_to(&mut self, text: &str) {
+        if self.undo.last().is_some_and(|entry| entry.after == text) {
+            return;
+        }
+        if let Some(index) = self.redo.iter().rposition(|entry| entry.after == text) {
+            while self.redo.len() > index {
+                if let Some(entry) = self.redo.pop() {
+                    self.undo.push(entry);
+                }
+            }
+            return;
+        }
+        while self.undo.last().is_some_and(|entry| entry.after != text) {
+            self.undo.pop();
+        }
+    }
+
     /// The label of the change [`Self::undo`] would revert.
     #[must_use]
     pub fn undo_label(&self) -> Option<&str> {
@@ -120,6 +140,30 @@ mod tests {
         history.record("x".into(), "y".into(), "after reload");
         assert!(!history.undo().unwrap().crosses_external_change);
         assert!(history.undo().unwrap().crosses_external_change);
+    }
+
+    #[test]
+    fn rewind_drops_commits_that_never_reached_the_disk() {
+        let mut history = History::new();
+        history.record("30".into(), "10".into(), "written");
+        history.record("10".into(), "1".into(), "discarded 1");
+        history.record("1".into(), "2".into(), "discarded 2");
+        history.rewind_to("10");
+        assert_eq!(history.undo_label(), Some("written"));
+        history.rewind_to("30");
+        assert_eq!(history.undo_label(), None);
+    }
+
+    #[test]
+    fn rewind_takes_back_a_discarded_undo() {
+        let mut history = History::new();
+        history.record("a".into(), "b".into(), "first");
+        history.record("b".into(), "c".into(), "second");
+        history.undo();
+        history.undo();
+        history.rewind_to("c");
+        assert_eq!(history.undo_label(), Some("second"));
+        assert_eq!(history.redo(), None);
     }
 
     proptest! {

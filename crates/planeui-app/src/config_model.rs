@@ -444,6 +444,7 @@ impl ConfigModel {
                 // The external edit is a change like any other, so undo reverts it first and
                 // redo can bring it back instead of losing it.
                 let previous = mem::replace(&mut self.on_disk, current.text.clone());
+                self.history.rewind_to(&previous);
                 self.history.note_external_change();
                 self.history
                     .record(previous, current.text, "Edit made outside PlaneUI");
@@ -734,6 +735,29 @@ mod tests {
         assert_eq!(
             fixture.disk(),
             "# Gaps between windows\naccordion-padding = 4 # px\n"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn undo_never_resurrects_changes_an_external_edit_discarded(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let model = fixture.model(cx);
+        set_padding(&model, 1, cx);
+        set_padding(&model, 2, cx);
+        let external = "accordion-padding = 99\n";
+        fixture.write_disk(external);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), external);
+
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            ORIGINAL,
+            "discarded edits are not undo targets"
         );
     }
 }
