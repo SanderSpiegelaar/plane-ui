@@ -1,0 +1,20 @@
+[package]
+name = "planeui-app"
+description = "PlaneUI: a form editor for the AeroSpace window manager config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "PlaneUI"
+path = "src/main.rs"
+
+[dependencies]
+planeui-core.workspace = true
+gpui-kit.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true
