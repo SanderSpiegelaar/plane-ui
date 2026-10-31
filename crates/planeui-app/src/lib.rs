@@ -4,6 +4,7 @@ pub mod config_model;
 pub mod debug_control;
 pub mod fields;
 pub mod shell;
+pub mod snapshots;
 pub mod startup;
 #[cfg(test)]
 mod test_support;

@@ -3,7 +3,8 @@
 mod snapshot;
 
 pub use snapshot::{
-    SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore, line_diff_stats,
+    SNAPSHOT_KEEP, SnapshotError, SnapshotId, SnapshotMeta, SnapshotStore, UtcDateTime,
+    line_diff_stats,
 };
 
 use std::ffi::OsString;

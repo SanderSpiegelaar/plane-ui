@@ -1,7 +1,7 @@
 //! The permanent window layout: section sidebar, content pane, reload-error and auto-reload
 //! banners, status bar and toasts.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -17,9 +17,11 @@ use gpui_kit::{
 };
 use planeui_core::config_doc::KeyPath;
 use planeui_core::prefs::{Prefs, PrefsStore};
+use planeui_core::store::UtcDateTime;
 
 use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigModel, SaveStatus};
 use crate::debug_control::AccordionPaddingControl;
+use crate::snapshots::SnapshotsView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
 
 /// The key context in which the arrow keys move between sections.
@@ -89,6 +91,9 @@ pub struct Shell {
     model: Entity<ConfigModel>,
     section: Section,
     padding_control: Entity<AccordionPaddingControl>,
+    /// Built when the Snapshots section opens and dropped when it closes, so the list is read
+    /// fresh each time and not at all otherwise.
+    snapshots: Option<Entity<SnapshotsView>>,
     prefs_store: PrefsStore,
     prefs: Prefs,
     prefs_save: Option<Task<()>>,
@@ -127,6 +132,7 @@ impl Shell {
             model,
             section: Section::Keybindings,
             padding_control,
+            snapshots: None,
             prefs_store,
             prefs,
             prefs_save: None,
@@ -143,8 +149,14 @@ impl Shell {
     }
 
     /// Shows `section`.
-    pub fn select(&mut self, section: Section, cx: &mut Context<Self>) {
+    pub fn select(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
         self.section = section;
+        self.snapshots = (section == Section::Snapshots).then(|| {
+            self.snapshots.take().unwrap_or_else(|| {
+                let model = self.model.clone();
+                cx.new(|cx| SnapshotsView::new(model, window, cx))
+            })
+        });
         cx.notify();
     }
 
@@ -154,7 +166,7 @@ impl Shell {
                 .active(section == self.section)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     window.focus(&this.sections_focus, cx);
-                    this.select(section, cx);
+                    this.select(section, window, cx);
                 }))
         });
         div()
@@ -163,11 +175,11 @@ impl Shell {
             .aria_label("Sections")
             .key_context(SECTIONS_CONTEXT)
             .track_focus(&self.sections_focus)
-            .on_action(cx.listener(|this, _: &PreviousSection, _, cx| {
-                this.select(this.section.previous(), cx);
+            .on_action(cx.listener(|this, _: &PreviousSection, window, cx| {
+                this.select(this.section.previous(), window, cx);
             }))
-            .on_action(cx.listener(|this, _: &NextSection, _, cx| {
-                this.select(this.section.next(), cx);
+            .on_action(cx.listener(|this, _: &NextSection, window, cx| {
+                this.select(this.section.next(), window, cx);
             }))
             .h_full()
             .child(
@@ -300,8 +312,9 @@ impl Shell {
 
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let heading = div().text_lg().child(self.section.title());
-        let body = match self.section {
-            Section::General => self.padding_control.clone().into_any_element(),
+        let body = match (self.section, &self.snapshots) {
+            (Section::General, _) => self.padding_control.clone().into_any_element(),
+            (Section::Snapshots, Some(snapshots)) => snapshots.clone().into_any_element(),
             _ => div()
                 .text_color(cx.theme().muted_foreground)
                 .child("This section is not editable yet.")
@@ -401,7 +414,9 @@ fn status_text(status: &SaveStatus) -> SharedString {
     match status {
         SaveStatus::Idle => "No changes yet".into(),
         SaveStatus::Writing => "Saving…".into(),
-        SaveStatus::Applied { at } => format!("Applied {}", utc_clock(*at)).into(),
+        SaveStatus::Applied { at } => {
+            format!("Applied {}", display_time(*at, TimeFormat::Clock)).into()
+        }
         SaveStatus::ReloadFailed { .. } => "Saved, but AeroSpace reported errors".into(),
         SaveStatus::NotRunning => "AeroSpace not running: changes apply on next start".into(),
         SaveStatus::NotInstalled => "AeroSpace not found: changes apply on next start".into(),
@@ -422,18 +437,29 @@ fn aerospace_text(info: &AerospaceInfo) -> SharedString {
     }
 }
 
-/// Std has no time zone database, so the time is shown in UTC and says so.
-fn utc_clock(at: SystemTime) -> String {
-    let seconds = at
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-        % 86_400;
-    format!(
-        "{:02}:{:02}:{:02} UTC",
-        seconds / 3600,
-        seconds / 60 % 60,
-        seconds % 60
-    )
+/// How much of a time [`display_time`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeFormat {
+    /// `17:15:03 UTC`.
+    Clock,
+    /// `2026-10-31 17:15:03 UTC`.
+    DateAndClock,
+}
+
+/// Std has no time zone database, so times are shown in UTC and say so. Every time PlaneUI shows
+/// goes through here, so switching to local time is a change in one place.
+#[must_use]
+pub fn display_time(at: SystemTime, format: TimeFormat) -> String {
+    let Some(utc) = UtcDateTime::from_system_time(at) else {
+        return "before 1970".to_owned();
+    };
+    let clock = format!("{:02}:{:02}:{:02} UTC", utc.hour, utc.minute, utc.second);
+    match format {
+        TimeFormat::Clock => clock,
+        TimeFormat::DateAndClock => {
+            format!("{:04}-{:02}-{:02} {clock}", utc.year, utc.month, utc.day)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -442,7 +468,7 @@ mod tests {
     use std::time::Duration;
 
     use gpui_kit::test::{TestAppContextExt as _, TestWindowExt as _};
-    use gpui_kit::{AnyWindowHandle, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, Focusable as _, TestAppContext};
     use planeui_core::aerospace::{ReloadMessage, ReloadOutcome};
 
     use super::*;
@@ -650,6 +676,51 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.section()),
             Section::Gaps
         );
+    }
+
+    #[gpui_kit::test]
+    fn cmd_z_undoes_a_restore_made_from_the_snapshots_list(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, shell) = open_shell(cx, &fixture);
+        set_padding(&model(cx, &shell), 12, cx);
+        cx.run_until_parked();
+        let edited = fixture.disk();
+
+        in_window(cx, window, |window, cx| {
+            shell.update(cx, |shell, cx| shell.select(Section::Snapshots, window, cx));
+        });
+        cx.run_until_parked();
+        let list = shell.read_with(cx, |shell, cx| {
+            shell
+                .snapshots
+                .as_ref()
+                .map(|snapshots| snapshots.focus_handle(cx))
+        });
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.focus(list.as_ref().unwrap(), cx);
+            window.press("down", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), ORIGINAL);
+        // The dialog hands focus back to the list once its exit animation ends.
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+
+        in_window(cx, window, |window, cx| window.press("cmd-z", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), edited);
+
+        in_window(cx, window, |window, cx| {
+            shell.update(cx, |shell, cx| shell.select(Section::Gaps, window, cx));
+        });
+        assert!(shell.read_with(cx, |shell, _| shell.snapshots.is_none()));
     }
 
     #[gpui_kit::test]

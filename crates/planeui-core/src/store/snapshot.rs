@@ -379,6 +379,42 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// A UTC calendar date and time of day, to the second, for showing times without a time zone
+/// database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UtcDateTime {
+    /// The year, such as 2026.
+    pub year: i64,
+    /// 1 to 12.
+    pub month: i64,
+    /// 1 to 31.
+    pub day: i64,
+    /// 0 to 23.
+    pub hour: u64,
+    /// 0 to 59.
+    pub minute: u64,
+    /// 0 to 59.
+    pub second: u64,
+}
+
+impl UtcDateTime {
+    /// The UTC date and time of `at`, or `None` before 1970.
+    #[must_use]
+    pub fn from_system_time(at: SystemTime) -> Option<Self> {
+        let seconds = at.duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let (year, month, day) = civil_from_days(i64::try_from(seconds / 86_400).ok()?);
+        let in_day = seconds % 86_400;
+        Some(Self {
+            year,
+            month,
+            day,
+            hour: in_day / 3600,
+            minute: in_day / 60 % 60,
+            second: in_day % 60,
+        })
+    }
+}
+
 /// Lines added and removed going from `old` to `new`, for the snapshots list.
 #[must_use]
 pub fn line_diff_stats(old: &str, new: &str) -> (usize, usize) {
@@ -399,6 +435,26 @@ mod tests {
     fn line_diff_stats_counts_changed_lines() {
         assert_eq!(line_diff_stats("a\nb\nc\n", "a\nB\nc\nd\n"), (2, 1));
         assert_eq!(line_diff_stats("same\n", "same\n"), (0, 0));
+    }
+
+    #[test]
+    fn utc_date_time_splits_a_system_time() {
+        let at = UNIX_EPOCH + Duration::from_millis(1_793_466_903_042);
+        assert_eq!(
+            UtcDateTime::from_system_time(at),
+            Some(UtcDateTime {
+                year: 2026,
+                month: 10,
+                day: 31,
+                hour: 17,
+                minute: 15,
+                second: 3,
+            })
+        );
+        assert_eq!(
+            UtcDateTime::from_system_time(UNIX_EPOCH - Duration::from_secs(1)),
+            None
+        );
     }
 
     #[test]

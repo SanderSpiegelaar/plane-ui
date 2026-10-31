@@ -11,7 +11,7 @@ use planeui_core::apply::{ApplyContext, ApplyOutcome, apply};
 use planeui_core::config_doc::{ConfigDoc, EditError, ParseError};
 use planeui_core::config_view::ConfigView;
 use planeui_core::history::{EntryId, History, HistoryStep};
-use planeui_core::store::{DiskStamp, Loaded};
+use planeui_core::store::{DiskStamp, Loaded, SnapshotStore};
 use planeui_core::validate::{ValidationReport, validate};
 
 /// What happened to the latest change, for the status bar and the reload-error banner.
@@ -213,6 +213,12 @@ impl ConfigModel {
     #[must_use]
     pub fn aerospace(&self) -> &AerospaceInfo {
         &self.aerospace
+    }
+
+    /// Where a copy of the file is kept before each write.
+    #[must_use]
+    pub fn snapshots(&self) -> &SnapshotStore {
+        &self.context.snapshots
     }
 
     /// The label of the change [`Self::undo`] would revert.
