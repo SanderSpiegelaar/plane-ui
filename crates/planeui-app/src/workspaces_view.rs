@@ -1,5 +1,7 @@
 //! Persistent workspaces and ordered monitor assignments.
 
+use std::fmt::Display;
+
 use gpui_kit::component::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -13,10 +15,9 @@ use gpui_kit::{
 use planeui_core::commands::WorkspaceName;
 use planeui_core::config_doc::ConfigDoc;
 use planeui_core::config_view::{Assignment, Field};
-use planeui_core::monitors::{self, MonitorEditError, MonitorPattern};
+use planeui_core::monitors::{self, MonitorPattern};
 use planeui_core::settings::{
-    WorkspaceEditError, add_persistent_workspace, move_persistent_workspace,
-    remove_persistent_workspace,
+    add_persistent_workspace, move_persistent_workspace, remove_persistent_workspace,
 };
 
 use crate::config_model::ConfigModel;
@@ -109,19 +110,17 @@ impl WorkspacesView {
         }
     }
 
-    fn edit(
+    fn edit<E: Display>(
         &mut self,
         label: &str,
-        change: impl FnOnce(&mut ConfigDoc) -> Result<(), WorkspaceEditError>,
+        change: impl FnOnce(&mut ConfigDoc) -> Result<(), E>,
         cx: &mut Context<Self>,
     ) {
-        let mut doc = self.model.read(cx).doc().clone();
-        self.error = change(&mut doc).err().map(|error| error.to_string().into());
-        if self.error.is_none() {
-            self.model.update(cx, |model, cx| {
-                model.commit(doc, label, cx);
-            });
-        }
+        self.error = self
+            .model
+            .update(cx, |model, cx| model.edit(label, cx, change))
+            .err()
+            .map(|error| error.to_string().into());
         cx.notify();
     }
 
@@ -145,26 +144,10 @@ impl WorkspacesView {
         }
     }
 
-    fn edit_assignment(
-        &mut self,
-        label: &str,
-        change: impl FnOnce(&mut ConfigDoc) -> Result<(), MonitorEditError>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut doc = self.model.read(cx).doc().clone();
-        self.error = change(&mut doc).err().map(|error| error.to_string().into());
-        if self.error.is_none() {
-            self.model.update(cx, |model, cx| {
-                model.commit(doc, label, cx);
-            });
-        }
-        cx.notify();
-    }
-
     fn add_assignment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match WorkspaceName::new(self.assignment_input.read(cx).value().trim().to_owned()) {
             Ok(name) => {
-                self.edit_assignment(
+                self.edit(
                     "Add monitor assignment",
                     |doc| monitors::add_assignment(doc, name.as_str(), &MonitorPattern::Main),
                     cx,
@@ -216,7 +199,7 @@ impl WorkspacesView {
                     .iter()
                     .find(|row| row.workspace == target)
                     .map_or(0, |row| row.patterns.len());
-                this.edit_assignment(
+                this.edit(
                     "Set monitor pattern",
                     |doc| match index {
                         Some(index) => monitors::set_pattern(doc, &target, index, &event.0),
@@ -332,7 +315,7 @@ impl WorkspacesView {
                         .tooltip("Remove assignment")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.editor = None;
-                            this.edit_assignment(
+                            this.edit(
                                 "Remove monitor assignment",
                                 |doc| monitors::remove_assignment(doc, &remove_workspace),
                                 cx,
@@ -376,7 +359,7 @@ impl WorkspacesView {
                     .disabled(index == 0)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.editor = None;
-                        this.edit_assignment(
+                        this.edit(
                             "Move monitor pattern up",
                             |doc| {
                                 monitors::move_pattern(
@@ -398,7 +381,7 @@ impl WorkspacesView {
                     .disabled(index + 1 == count)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.editor = None;
-                        this.edit_assignment(
+                        this.edit(
                             "Move monitor pattern down",
                             |doc| monitors::move_pattern(doc, &down_workspace, index, index + 1),
                             cx,
@@ -412,7 +395,7 @@ impl WorkspacesView {
                     .tooltip("Remove pattern")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.editor = None;
-                        this.edit_assignment(
+                        this.edit(
                             "Remove monitor pattern",
                             |doc| monitors::remove_pattern(doc, &remove_workspace, index),
                             cx,

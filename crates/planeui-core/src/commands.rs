@@ -4,6 +4,8 @@
 //! <https://github.com/nikitabobko/AeroSpace/tree/v0.21.3-Beta/Sources/Common/cmdArgs/impl>.
 
 use std::collections::BTreeMap;
+use std::iter::Peekable;
+use std::str::Chars;
 
 use toml_edit::{Item, Value};
 
@@ -117,6 +119,37 @@ text_enum! {
     }
 }
 
+const RESERVED_WORKSPACE_NAMES: &[&str] = &[
+    "focused",
+    "non-focused",
+    "visible",
+    "invisible",
+    "non-visible",
+    "active",
+    "non-active",
+    "inactive",
+    "back-and-forth",
+    "back_and_forth",
+    "previous",
+    "prev",
+    "next",
+    "monitor",
+    "workspace",
+    "monitors",
+    "workspaces",
+    "all",
+    "none",
+    "mouse",
+    "target",
+];
+
+fn has_forbidden_characters(name: &str) -> bool {
+    let mixed_quotes = name.contains('\'') && name.contains('"');
+    mixed_quotes
+        || name.starts_with(['_', '-'])
+        || name.contains(|character: char| character == ',' || character.is_whitespace())
+}
+
 /// A workspace name validated against AeroSpace's reserved names and characters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceName(String);
@@ -128,35 +161,9 @@ impl WorkspaceName {
     /// Returns an error for names AeroSpace reserves or forbids.
     pub fn new(name: impl Into<String>) -> Result<Self, Unsupported> {
         let name = name.into();
-        let reserved = [
-            "focused",
-            "non-focused",
-            "visible",
-            "invisible",
-            "non-visible",
-            "active",
-            "non-active",
-            "inactive",
-            "back-and-forth",
-            "back_and_forth",
-            "previous",
-            "prev",
-            "next",
-            "monitor",
-            "workspace",
-            "monitors",
-            "workspaces",
-            "all",
-            "none",
-            "mouse",
-            "target",
-        ];
         if name.is_empty()
-            || name.starts_with(['_', '-'])
-            || name.contains(',')
-            || name.chars().any(char::is_whitespace)
-            || reserved.contains(&name.as_str())
-            || (name.contains('\'') && name.contains('"'))
+            || RESERVED_WORKSPACE_NAMES.contains(&name.as_str())
+            || has_forbidden_characters(&name)
         {
             return Err(unsupported(format!("invalid workspace name `{name}`")));
         }
@@ -654,51 +661,97 @@ pub(crate) fn tokenize(text: &str, conditions: bool) -> Result<Vec<ScriptToken>,
             result.push(ScriptToken::And);
             continue;
         }
-        let mut word = String::new();
-        if matches!(character, '\'' | '"') {
-            let mut closed = false;
-            for next in chars.by_ref() {
-                if next == character {
-                    closed = true;
-                    break;
-                }
-                word.push(next);
-            }
-            if !closed {
-                return Err(unsupported("unclosed quote"));
-            }
-            if chars
-                .peek()
-                .is_some_and(|next| !(next.is_whitespace() || conditions && *next == '&'))
-            {
-                return Err(unsupported("expected whitespace after closing quote"));
-            }
+        let word = if matches!(character, '\'' | '"') {
+            quoted_word(character, &mut chars, conditions)?
         } else {
-            word.push(character);
-            while chars
-                .peek()
-                .is_some_and(|next| !(next.is_whitespace() || conditions && *next == '&'))
-            {
-                if let Some(next) = chars.next() {
-                    word.push(next);
-                }
-            }
-            for operator in ["&&", "||", ";", "|", "(", ")"] {
-                if word.contains(operator) {
-                    return Err(unsupported(format!("uses the shell operator `{operator}`")));
-                }
-            }
-            if !(conditions && word == "~=")
-                && word.chars().any(|next| "'\"$~&?*!\\<>`#".contains(next))
-            {
-                return Err(unsupported(format!(
-                    "unquoted reserved character in `{word}`"
-                )));
-            }
-        }
+            bare_word(character, &mut chars, conditions)?
+        };
         result.push(ScriptToken::Word(word));
     }
     Ok(result)
+}
+
+fn continues_word(next: char, conditions: bool) -> bool {
+    !(next.is_whitespace() || conditions && next == '&')
+}
+
+fn quoted_word(
+    quote: char,
+    chars: &mut Peekable<Chars<'_>>,
+    conditions: bool,
+) -> Result<String, Unsupported> {
+    let mut word = String::new();
+    loop {
+        match chars.next() {
+            Some(next) if next == quote => break,
+            Some(next) => word.push(next),
+            None => return Err(unsupported("unclosed quote")),
+        }
+    }
+    if chars
+        .peek()
+        .is_some_and(|next| continues_word(*next, conditions))
+    {
+        return Err(unsupported("expected whitespace after closing quote"));
+    }
+    Ok(word)
+}
+
+fn bare_word(
+    first: char,
+    chars: &mut Peekable<Chars<'_>>,
+    conditions: bool,
+) -> Result<String, Unsupported> {
+    let mut word = String::from(first);
+    while let Some(next) = chars.next_if(|next| continues_word(*next, conditions)) {
+        word.push(next);
+    }
+    if let Some(operator) = ["&&", "||", ";", "|", "(", ")"]
+        .into_iter()
+        .find(|operator| word.contains(operator))
+    {
+        return Err(unsupported(format!("uses the shell operator `{operator}`")));
+    }
+    if !(conditions && word == "~=") && word.contains(|next| "'\"$~&?*!\\<>`#".contains(next)) {
+        return Err(unsupported(format!(
+            "unquoted reserved character in `{word}`"
+        )));
+    }
+    Ok(word)
+}
+
+/// Commands whose positional argument may follow `--` to escape a leading dash.
+const LITERAL_COMMANDS: &[&str] = &[
+    "workspace",
+    "move-node-to-workspace",
+    "mode",
+    "focus-monitor",
+    "move-node-to-monitor",
+    "move-workspace-to-monitor",
+];
+
+fn flag_value(
+    spec: &CommandSpec,
+    token: &str,
+    tokens: &mut std::slice::Iter<'_, String>,
+) -> Result<Option<String>, Unsupported> {
+    let flag = spec
+        .args
+        .iter()
+        .find_map(|arg| match arg.kind {
+            ArgKind::Flag(flag) if flag.name == token => Some(flag),
+            _ => None,
+        })
+        .ok_or_else(|| unsupported(format!("unknown flag `{token}` for `{}`", spec.name)))?;
+    if flag.value.is_none() {
+        return Ok(None);
+    }
+    tokens
+        .next()
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| unsupported(format!("missing value for `{token}`")))
 }
 
 #[derive(Debug)]
@@ -717,49 +770,21 @@ impl Arguments {
         };
         let mut tokens = tokens.iter();
         while let Some(token) = tokens.next() {
-            if token == "--" && !result.literal {
-                if !matches!(
-                    spec.name,
-                    "workspace"
-                        | "move-node-to-workspace"
-                        | "mode"
-                        | "focus-monitor"
-                        | "move-node-to-monitor"
-                        | "move-workspace-to-monitor"
-                ) {
+            if result.literal || !token.starts_with("--") {
+                result.positional.push(token.clone());
+            } else if token == "--" {
+                if !LITERAL_COMMANDS.contains(&spec.name) {
                     return Err(unsupported(format!(
                         "unknown flag `--` for `{}`",
                         spec.name
                     )));
                 }
                 result.literal = true;
-            } else if token.starts_with("--") && !result.literal {
-                let flag = spec
-                    .args
-                    .iter()
-                    .find_map(|arg| match arg.kind {
-                        ArgKind::Flag(flag) if flag.name == token => Some(flag),
-                        _ => None,
-                    })
-                    .ok_or_else(|| {
-                        unsupported(format!("unknown flag `{token}` for `{}`", spec.name))
-                    })?;
-                let value = if flag.value.is_some() {
-                    Some(
-                        tokens
-                            .next()
-                            .filter(|value| !value.starts_with("--"))
-                            .ok_or_else(|| unsupported(format!("missing value for `{token}`")))?
-                            .clone(),
-                    )
-                } else {
-                    None
-                };
+            } else {
+                let value = flag_value(spec, token, &mut tokens)?;
                 if result.flags.insert(token.clone(), value).is_some() {
                     return Err(unsupported(format!("duplicate flag `{token}`")));
                 }
-            } else {
-                result.positional.push(token.clone());
             }
         }
         Ok(result)

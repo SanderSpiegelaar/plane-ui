@@ -9,7 +9,7 @@ use anyhow::Context as _;
 use gpui_kit::{AppContext as _, Context, EventEmitter, Task};
 use planeui_core::aerospace::{AerospaceVersion, CliError, ReloadMessage, ReloadOutcome};
 use planeui_core::apply::{ApplyContext, ApplyOutcome, apply};
-use planeui_core::config_doc::{ConfigDoc, EditError, ParseError};
+use planeui_core::config_doc::{ConfigDoc, ParseError};
 use planeui_core::config_view::ConfigView;
 use planeui_core::history::{EntryId, History, HistoryStep};
 use planeui_core::store::{DiskStamp, Loaded, SnapshotId, SnapshotStore};
@@ -249,12 +249,12 @@ impl ConfigModel {
     /// # Errors
     ///
     /// The edit itself failed; nothing changed.
-    pub fn edit(
+    pub fn edit<E>(
         &mut self,
         label: impl Into<String>,
         cx: &mut Context<Self>,
-        change: impl FnOnce(&mut ConfigDoc) -> Result<(), EditError>,
-    ) -> Result<(), EditError> {
+        change: impl FnOnce(&mut ConfigDoc) -> Result<(), E>,
+    ) -> Result<(), E> {
         let mut doc = self.doc.clone();
         change(&mut doc)?;
         self.commit(doc, label, cx);

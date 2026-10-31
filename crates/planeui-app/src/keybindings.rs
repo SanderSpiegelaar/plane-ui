@@ -413,27 +413,18 @@ impl KeybindingsView {
         cx: &mut Context<Self>,
     ) {
         self.error = None;
-        // Binding operations have richer errors than ConfigModel's generic document edits.
-        let result = self.model.update(cx, |model, cx| {
-            model.edit(label, cx, |doc| {
-                *doc = edited;
-                Ok(())
-            })
-        });
-        if let Err(error) = result {
-            self.show_error(error.to_string(), window, cx);
-        } else {
-            let errors = self
-                .model
-                .read(cx)
-                .report()
-                .errors()
-                .map(|issue| issue.message.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !errors.is_empty() {
-                self.show_error(errors, window, cx);
-            }
+        self.model
+            .update(cx, |model, cx| model.commit(edited, label, cx));
+        let errors = self
+            .model
+            .read(cx)
+            .report()
+            .errors()
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !errors.is_empty() {
+            self.show_error(errors, window, cx);
         }
         cx.notify();
     }

@@ -1,6 +1,6 @@
 //! Shared structured command controls for bindings and window rules.
 
-use crate::binding_draft::CommandDraft;
+use crate::binding_draft::{ArgumentDraft, CommandDraft, DraftError};
 use crate::config_model::ConfigModel;
 use crate::fields::{CommitField, CommitTextField, Committed};
 use gpui_kit::TestSupportExt as _;
@@ -13,11 +13,19 @@ use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectStat
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
 };
-use planeui_core::commands::{ArgKind, CATALOGUE, Command, WorkspaceTarget};
+use planeui_core::commands::{
+    ArgKind, CATALOGUE, Command, CommandSpec, ParsedScript, WorkspaceTarget,
+};
 use planeui_core::config_doc::KeyPath;
+
+fn default_draft(spec: &CommandSpec) -> Result<CommandDraft, DraftError> {
+    spec.default_command()
+        .map_err(|error| DraftError(error.to_string()))
+        .and_then(|command| CommandDraft::new(&command))
+}
 
 pub(crate) type Picker = SelectState<SearchableVec<SharedString>>;
 
@@ -112,12 +120,46 @@ impl CommandForm {
         let Some(command) = self.commands.get(command_index).cloned() else {
             return;
         };
+        let select = self.command_picker(command_index, command.spec.display_name, window, cx);
+        self.pickers.push(select);
+        let mut fields = Vec::new();
+        let mut suggestions = Vec::new();
+        for (argument_index, argument) in command.arguments.iter().enumerate() {
+            let kind = match argument.spec.kind {
+                ArgKind::Flag(flag) => flag.value.copied(),
+                kind => Some(kind),
+            };
+            let widgets = kind.map_or_else(Vec::new, |kind| {
+                self.argument_widgets(
+                    kind,
+                    &argument.values,
+                    (command_index, argument_index),
+                    window,
+                    cx,
+                )
+            });
+            let suggestion = matches!(kind, Some(ArgKind::Workspace))
+                .then(|| self.workspace_suggestion(command_index, argument_index, window, cx));
+            fields.push(widgets);
+            suggestions.push(suggestion);
+        }
+        self.fields.push(fields);
+        self.suggestions.push(suggestions);
+    }
+
+    fn command_picker(
+        &mut self,
+        command_index: usize,
+        current: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Picker> {
         let select = picker(
             CATALOGUE
                 .iter()
                 .map(|spec| spec.display_name.into())
                 .collect(),
-            Some(command.spec.display_name),
+            Some(current),
             window,
             cx,
         );
@@ -130,83 +172,85 @@ impl CommandForm {
                     .iter()
                     .find(|spec| Some(spec.display_name) == value.as_deref())
                 {
-                    match spec.default_command() {
-                        Ok(command) => {
-                            let command = match CommandDraft::new(&command) {
-                                Ok(command) => command,
-                                Err(error) => {
-                                    this.error = Some(error.0);
-                                    cx.notify();
-                                    return;
-                                }
-                            };
-                            if let Some(draft) = this.commands.get_mut(command_index) {
-                                *draft = command;
-                            }
-                            this.error = None;
-                            this.rebuild(window, cx);
-                            this.focus_command(command_index, window, cx);
-                        }
-                        Err(error) => {
-                            this.error = Some(error.to_string());
-                            cx.notify();
-                        }
-                    }
+                    this.replace_command(command_index, spec, window, cx);
                 }
             },
         ));
-        self.pickers.push(select);
-        let mut fields = Vec::new();
-        let mut suggestions = Vec::new();
-        for (argument_index, argument) in command.arguments.iter().enumerate() {
-            let kind = match argument.spec.kind {
-                ArgKind::Flag(flag) => flag.value.copied(),
-                kind => Some(kind),
-            };
-            let mut widgets = Vec::new();
-            if let Some(kind) = kind {
-                for value_index in 0..argument.values.len().max(1) {
-                    let value = argument
-                        .values
-                        .get(value_index)
-                        .cloned()
-                        .unwrap_or_default();
-                    let widget = self.widget(
-                        kind,
-                        value,
-                        (command_index, argument_index, value_index),
-                        window,
-                        cx,
-                    );
-                    widgets.push(widget);
-                    if matches!(kind, ArgKind::LayoutOptions) {
-                        break;
-                    }
+        select
+    }
+
+    fn replace_command(
+        &mut self,
+        command_index: usize,
+        spec: &CommandSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match default_draft(spec) {
+            Ok(command) => {
+                if let Some(draft) = self.commands.get_mut(command_index) {
+                    *draft = command;
                 }
+                self.error = None;
+                self.rebuild(window, cx);
+                self.focus_command(command_index, window, cx);
             }
-            let suggestion = if matches!(kind, Some(ArgKind::Workspace)) {
-                let select = picker(self.workspaces(cx), None, window, cx);
-                self.subscriptions.push(cx.subscribe_in(
-                    &select,
-                    window,
-                    move |this, _, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
-                        let SelectEvent::Confirm(value) = event;
-                        if let Some(value) = value {
-                            this.set_value(command_index, argument_index, 0, value.to_string(), cx);
-                            this.rebuild(window, cx);
-                            this.focus_command(command_index, window, cx);
-                        }
-                    },
-                ));
-                Some(select)
-            } else {
-                None
-            };
-            fields.push(widgets);
-            suggestions.push(suggestion);
+            Err(error) => {
+                self.error = Some(error.0);
+                cx.notify();
+            }
         }
-        self.fields.push(fields);
-        self.suggestions.push(suggestions);
+    }
+
+    fn argument_widgets(
+        &mut self,
+        kind: ArgKind,
+        values: &[String],
+        (command_index, argument_index): (usize, usize),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Widget> {
+        // Layout options render as one toggle group however many values are set.
+        let count = if matches!(kind, ArgKind::LayoutOptions) {
+            1
+        } else {
+            values.len().max(1)
+        };
+        (0..count)
+            .map(|value_index| {
+                let value = values.get(value_index).cloned().unwrap_or_default();
+                self.widget(
+                    kind,
+                    value,
+                    (command_index, argument_index, value_index),
+                    window,
+                    cx,
+                )
+            })
+            .collect()
+    }
+
+    fn workspace_suggestion(
+        &mut self,
+        command_index: usize,
+        argument_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Picker> {
+        let select = picker(self.workspaces(cx), None, window, cx);
+        self.subscriptions.push(cx.subscribe_in(
+            &select,
+            window,
+            move |this, _, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    this.set_value(command_index, argument_index, 0, value.to_string(), cx);
+                    this.rebuild(window, cx);
+                    this.focus_command(command_index, window, cx);
+                }
+            },
+        ));
+        select
     }
 
     fn widget(
@@ -337,11 +381,7 @@ impl CommandForm {
         let Some(spec) = CATALOGUE.first() else {
             return;
         };
-        match spec
-            .default_command()
-            .map_err(|error| crate::binding_draft::DraftError(error.to_string()))
-            .and_then(|command| CommandDraft::new(&command))
-        {
+        match default_draft(spec) {
             Ok(command) => {
                 self.commands.push(command);
                 self.rebuild(window, cx);
@@ -376,28 +416,28 @@ impl CommandForm {
 
     fn workspaces(&self, cx: &Context<Self>) -> Vec<SharedString> {
         let model = self.model.read(cx);
-        let mut names = Vec::new();
-        for mode in &model.view().modes {
-            for binding in &mode.bindings {
-                if let planeui_core::commands::ParsedScript::Editable { commands, .. } =
-                    &binding.script
-                {
-                    for command in commands {
-                        if let Command::Workspace {
-                            target: WorkspaceTarget::Name(name),
-                            ..
-                        }
-                        | Command::MoveNodeToWorkspace {
-                            target: WorkspaceTarget::Name(name),
-                            ..
-                        } = command
-                        {
-                            names.push(SharedString::from(name.as_str().to_owned()));
-                        }
-                    }
+        let mut names: Vec<SharedString> = model
+            .view()
+            .modes
+            .iter()
+            .flat_map(|mode| &mode.bindings)
+            .filter_map(|binding| match &binding.script {
+                ParsedScript::Editable { commands, .. } => Some(commands),
+                ParsedScript::ReadOnly { .. } => None,
+            })
+            .flatten()
+            .filter_map(|command| match command {
+                Command::Workspace {
+                    target: WorkspaceTarget::Name(name),
+                    ..
                 }
-            }
-        }
+                | Command::MoveNodeToWorkspace {
+                    target: WorkspaceTarget::Name(name),
+                    ..
+                } => Some(SharedString::from(name.as_str().to_owned())),
+                _ => None,
+            })
+            .collect();
         if let Some(array) = model
             .doc()
             .get(&KeyPath::from(["persistent-workspaces"]))
@@ -460,30 +500,9 @@ impl CommandForm {
                 .get(command_index)
                 .and_then(|fields| fields.get(argument_index))
             {
-                for widget in widgets {
-                    row = match widget {
-                        Widget::Text(input) => {
-                            row.child(Input::new(input).aria_label(argument.spec.name))
-                        }
-                        Widget::Number(input) => row.child(
-                            div()
-                                .id(("number", command_index * 100 + argument_index))
-                                .test_support()
-                                .child(
-                                    NumberInput::new(input).accessibility_label(argument.spec.name),
-                                ),
-                        ),
-                        Widget::Select(select) => {
-                            row.child(Select::new(select).accessibility_label(argument.spec.name))
-                        }
-                        Widget::Layout => row.child(Self::render_layouts(
-                            &argument.values,
-                            command_index,
-                            argument_index,
-                            cx,
-                        )),
-                    };
-                }
+                row = row.children(widgets.iter().map(|widget| {
+                    Self::render_widget(widget, &argument, command_index, argument_index, cx)
+                }));
             }
             if let Some(Some(select)) = self
                 .suggestions
@@ -498,6 +517,31 @@ impl CommandForm {
             }
         }
         row
+    }
+
+    fn render_widget(
+        widget: &Widget,
+        argument: &ArgumentDraft,
+        command_index: usize,
+        argument_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = argument.spec.name;
+        match widget {
+            Widget::Text(input) => Input::new(input).aria_label(label).into_any_element(),
+            Widget::Number(input) => div()
+                .id(("number", command_index * 100 + argument_index))
+                .test_support()
+                .child(NumberInput::new(input).accessibility_label(label))
+                .into_any_element(),
+            Widget::Select(select) => Select::new(select)
+                .accessibility_label(label)
+                .into_any_element(),
+            Widget::Layout => {
+                Self::render_layouts(&argument.values, command_index, argument_index, cx)
+                    .into_any_element()
+            }
+        }
     }
 
     fn render_layouts(

@@ -444,62 +444,58 @@ pub fn inferred_persistent_workspaces(view: &crate::config_view::ConfigView) -> 
 }
 
 pub(crate) fn infer_workspaces(doc: &ConfigDoc) -> Vec<String> {
-    use crate::commands::{Command, WorkspaceTarget};
+    let bindings = doc
+        .get(&KeyPath::from(["mode"]))
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|modes| modes.iter())
+        .filter_map(|(_, mode)| mode.as_table_like()?.get("binding")?.as_table_like())
+        .flat_map(|bindings| bindings.iter())
+        .flat_map(|(_, binding)| binding_workspaces(binding));
+    let assignments = doc
+        .get(&KeyPath::from(["workspace-to-monitor-force-assignment"]))
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|assignments| assignments.iter())
+        .map(|(name, _)| name.to_owned());
     let mut names = Vec::new();
-    let mut add = |name: String| {
+    for name in bindings.chain(assignments) {
         if !names.contains(&name) {
             names.push(name);
         }
-    };
-    if let Some(modes) = doc
-        .get(&KeyPath::from(["mode"]))
-        .and_then(Item::as_table_like)
-    {
-        for (_, mode) in modes.iter() {
-            if let Some(bindings) = mode
-                .as_table_like()
-                .and_then(|mode| mode.get("binding"))
-                .and_then(Item::as_table_like)
-            {
-                for (_, binding) in bindings.iter() {
-                    let texts: Vec<&str> = if let Some(text) = binding.as_str() {
-                        vec![text]
-                    } else {
-                        binding
-                            .as_array()
-                            .map(|array| array.iter().filter_map(Value::as_str).collect())
-                            .unwrap_or_default()
-                    };
-                    let commands: Vec<Command> =
-                        texts.into_iter().flat_map(shell_commands).collect();
-                    // AeroSpace collects switches before moves within each binding.
-                    for moves in [false, true] {
-                        for command in &commands {
-                            let target = match command {
-                                Command::Workspace { target, .. } if !moves => Some(target),
-                                Command::MoveNodeToWorkspace { target, .. } if moves => {
-                                    Some(target)
-                                }
-                                _ => None,
-                            };
-                            if let Some(WorkspaceTarget::Name(name)) = target {
-                                add(name.as_str().to_owned());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if let Some(assignments) = doc
-        .get(&KeyPath::from(["workspace-to-monitor-force-assignment"]))
-        .and_then(Item::as_table_like)
-    {
-        for (name, _) in assignments.iter() {
-            add(name.to_owned());
-        }
     }
     names
+}
+
+fn binding_workspaces(binding: &Item) -> Vec<String> {
+    use crate::commands::{Command, WorkspaceTarget};
+    let texts: Vec<&str> = match binding.as_str() {
+        Some(text) => vec![text],
+        None => binding
+            .as_array()
+            .map(|array| array.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default(),
+    };
+    let commands: Vec<Command> = texts.into_iter().flat_map(shell_commands).collect();
+    let switches = commands.iter().filter_map(|command| match command {
+        Command::Workspace {
+            target: WorkspaceTarget::Name(name),
+            ..
+        } => Some(name),
+        _ => None,
+    });
+    let moves = commands.iter().filter_map(|command| match command {
+        Command::MoveNodeToWorkspace {
+            target: WorkspaceTarget::Name(name),
+            ..
+        } => Some(name),
+        _ => None,
+    });
+    // AeroSpace collects switches before moves within each binding.
+    switches
+        .chain(moves)
+        .map(|name| name.as_str().to_owned())
+        .collect()
 }
 
 fn shell_commands(text: &str) -> Vec<crate::commands::Command> {

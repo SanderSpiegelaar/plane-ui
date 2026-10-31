@@ -193,48 +193,40 @@ impl GapsView {
         change: impl FnOnce(&mut ConfigDoc) -> Result<(), GapEditError>,
         cx: &mut Context<Self>,
     ) {
-        let mut doc = self.model.read(cx).doc().clone();
-        self.error = change(&mut doc).err().map(|error| error.to_string().into());
-        if self.error.is_none() {
-            self.model.update(cx, |model, cx| {
-                model.commit(doc, label, cx);
-            });
-        }
+        self.error = self
+            .model
+            .update(cx, |model, cx| model.edit(label, cx, change))
+            .err()
+            .map(|error| error.to_string().into());
         cx.notify();
     }
 
     fn set(&mut self, gap: GapField, value: u32, cx: &mut Context<Self>) {
-        let mut doc = self.model.read(cx).doc().clone();
-        let result = if matches!(
+        let per_monitor = matches!(
             self.model.read(cx).view().gaps.get(gap),
             GapValue::PerMonitor(_)
-        ) {
-            gaps::set_gap_default(&mut doc, gap, value)
-        } else if self.linked && GapField::OUTER.contains(&gap) {
-            set_outer_linked(&mut doc, value)
-        } else {
-            set_gap(&mut doc, gap, value)
-        };
-        self.error = result.err().map(|error| error.to_string().into());
-        if self.error.is_none() {
-            self.model
-                .update(cx, |model, cx| model.commit(doc, "Set gaps", cx));
-        }
-        cx.notify();
+        );
+        let linked = self.linked && GapField::OUTER.contains(&gap);
+        self.edit(
+            "Set gaps",
+            |doc| {
+                if per_monitor {
+                    gaps::set_gap_default(doc, gap, value)
+                } else if linked {
+                    set_outer_linked(doc, value)
+                } else {
+                    set_gap(doc, gap, value)
+                }
+            },
+            cx,
+        );
     }
 
     fn reset(&mut self, gap: GapField, cx: &mut Context<Self>) {
-        let mut doc = self.model.read(cx).doc().clone();
-        self.error = reset_gap(&mut doc, gap)
-            .err()
-            .map(|error| error.to_string().into());
+        self.edit("Reset gap to default", |doc| reset_gap(doc, gap), cx);
         if self.error.is_none() {
             self.linked = false;
-            self.model.update(cx, |model, cx| {
-                model.commit(doc, "Reset gap to default", cx);
-            });
         }
-        cx.notify();
     }
 
     fn toggle_link(&mut self, linked: bool, window: &mut Window, cx: &mut Context<Self>) {
