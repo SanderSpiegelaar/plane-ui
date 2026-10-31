@@ -1,0 +1,11 @@
+---
+source: crates/planeui-core/tests/per_monitor_ops.rs
+assertion_line: 117
+expression: "TextDiff::from_lines(source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -8,4 +8,4 @@
+ outer.top = [
++    { monitor.2 = 12 },
+     { monitor.secondary = 4 },
+-    { monitor.2 = 12 },
+     8,

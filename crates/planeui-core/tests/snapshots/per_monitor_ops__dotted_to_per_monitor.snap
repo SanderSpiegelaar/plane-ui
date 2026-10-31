@@ -1,0 +1,9 @@
+---
+source: crates/planeui-core/tests/per_monitor_ops.rs
+assertion_line: 117
+expression: "TextDiff::from_lines(source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -2,2 +2,2 @@
+ gaps.outer.top = [{ monitor.main = 1 }, { monitor.'lg' = 2 }, 8] # gap
+-gaps.outer.bottom = 4
++gaps.outer.bottom = [{ monitor.main = 4 }, 4]

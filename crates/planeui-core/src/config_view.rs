@@ -298,7 +298,7 @@ impl General {
     }
 }
 
-/// The six gap leaves, including read-only per-monitor values.
+/// The six gap leaves, including parsed per-monitor values.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Gaps {
     /// Space between columns.

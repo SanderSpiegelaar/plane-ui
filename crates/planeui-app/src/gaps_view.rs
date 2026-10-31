@@ -178,9 +178,16 @@ impl GapsView {
         let path = gap.path().to_string();
         let label = gap.path().segments().last().cloned().unwrap_or_default();
         let editor = match &value {
-            GapValue::PerMonitor(raw) => v_flex()
+            GapValue::PerMonitor(_) => v_flex()
                 .gap_1()
-                .child(raw.0.clone())
+                .child(
+                    self.model
+                        .read(cx)
+                        .doc()
+                        .get(&gap.path())
+                        .map(|item| item.to_string().trim().to_owned())
+                        .unwrap_or_default(),
+                )
                 .child("per-monitor (editable in a later version)")
                 .into_any_element(),
             _ => div()

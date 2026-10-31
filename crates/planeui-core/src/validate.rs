@@ -241,6 +241,19 @@ fn gap_values(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue
                 kind: IssueKind::WrongType,
             });
         }
+        if let crate::gaps::GapValue::PerMonitor(value) = view.gaps.get(field) {
+            for (pattern, _) in &value.rules {
+                if let Some(message) = pattern.regex_warning() {
+                    issues.push(ValidationIssue {
+                        key_path: Some(field.path()),
+                        span: None,
+                        severity: Severity::Warning,
+                        kind: IssueKind::InvalidValue,
+                        message,
+                    });
+                }
+            }
+        }
     }
 }
 
