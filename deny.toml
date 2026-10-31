@@ -1,0 +1,60 @@
+[graph]
+# hyper and reqwest arrive only through gpui-kit-assets' wasm dependencies; scope checks to the
+# targets PlaneUI ships on so the network bans below hold for real builds.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# GPUI's tree carries several unmaintained-crate notices we cannot act on; vulnerabilities still fail.
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+# Transitive dependencies outside the allow list, each reviewed by crate.
+exceptions = [
+    { crate = "option-ext", allow = ["MPL-2.0"] },     # via dirs
+    { crate = "cbindgen", allow = ["MPL-2.0"] },       # build-time, via GPUI
+    { crate = "notify", allow = ["CC0-1.0"] },         # via gpui-component
+    { crate = "tiny-keccak", allow = ["CC0-1.0"] },    # via const-random
+    { crate = "enum-iterator", allow = ["0BSD"] },     # via gpui-component
+    { crate = "enum-iterator-derive", allow = ["0BSD"] },
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# NFR Privacy: PlaneUI never talks to the network.
+deny = [
+    { crate = "reqwest", reason = "PlaneUI makes no network requests" },
+    { crate = "gpui-pre-reqwest", reason = "PlaneUI makes no network requests" },
+    { crate = "hyper", reason = "PlaneUI makes no network requests" },
+    { crate = "ureq", reason = "PlaneUI makes no network requests" },
+    { crate = "isahc", reason = "PlaneUI makes no network requests" },
+    { crate = "curl", reason = "PlaneUI makes no network requests" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
