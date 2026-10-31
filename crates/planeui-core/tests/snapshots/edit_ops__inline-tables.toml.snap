@@ -1,0 +1,49 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -1,3 +1,3 @@
+ config-version = 2
+-gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }
++gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 20, right = 8, top = 8, bottom = 8 } }
+ key-mapping = {preset='qwerty'}
+
+## set new gaps.outer.planeui = 5
+@@ -1,3 +1,3 @@
+ config-version = 2
+-gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }
++gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8, planeui = 5 } }
+ key-mapping = {preset='qwerty'}
+
+## set new root accordion-padding = 12
+@@ -4,2 +4,3 @@
+ workspace-to-monitor-force-assignment = { 1 = 'main', 2 = 'secondary', 3 = ['secondary', 'main'], '4' = 'built-in' }
++accordion-padding = 12
+ 
+
+## set new section focus-follows-mouse.enabled = true
+@@ -7 +7,4 @@
+ binding = { alt-h = 'focus left', alt-l = 'focus right' }
++
++[focus-follows-mouse]
++enabled = true
+
+## set new binding mode.main.binding.alt-j
+@@ -6,2 +6,2 @@
+ [mode.main]
+-binding = { alt-h = 'focus left', alt-l = 'focus right' }
++binding = { alt-h = 'focus left', alt-l = 'focus right', alt-j = "focus down" }
+
+## remove gaps.outer.left
+@@ -1,3 +1,3 @@
+ config-version = 2
+-gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }
++gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { right = 8, top = 8, bottom = 8 } }
+ key-mapping = {preset='qwerty'}
+
+## remove config-version
+@@ -1,2 +1 @@
+-config-version = 2
+ gaps = { inner = { horizontal = 10, vertical = 10 }, outer = { left = 8, right = 8, top = 8, bottom = 8 } }

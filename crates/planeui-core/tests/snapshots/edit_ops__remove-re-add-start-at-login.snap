@@ -1,0 +1,13 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 189
+expression: "TextDiff::from_lines(&source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -6,3 +6,2 @@
+ config-version = 2 # trailing comment after a value
+-start-at-login   =   false    #   spaced-out trailing comment
+ 
+@@ -11,2 +10,3 @@
+ accordion-padding = 30
++start-at-login =   false    #   spaced-out trailing comment
+ #commented-out-key = 'value'

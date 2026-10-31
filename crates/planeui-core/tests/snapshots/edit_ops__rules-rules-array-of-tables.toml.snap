@@ -1,0 +1,61 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 160
+expression: "diffs(name, rule_edits)"
+---
+## append rule
+@@ -12,2 +12,6 @@
+ 
++[[on-window-detected]]
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
++
+ # Rule with a comment before it
+
+## insert rule first
+@@ -3,2 +3,6 @@
+ [[on-window-detected]]
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
++
++[[on-window-detected]]
+ if.app-id = 'com.apple.finder'
+
+## remove rule 0
+@@ -3,6 +3,2 @@
+ [[on-window-detected]]
+-if.app-id = 'com.apple.finder'
+-run = 'layout floating'
+-
+-[[on-window-detected]]
+ if.app-id = 'com.google.Chrome'
+
+## move rule 1 -> 0
+@@ -3,6 +3,2 @@
+ [[on-window-detected]]
+-if.app-id = 'com.apple.finder'
+-run = 'layout floating'
+-
+-[[on-window-detected]]
+ if.app-id = 'com.google.Chrome'
+@@ -12,2 +8,6 @@
+ 
++[[on-window-detected]]
++if.app-id = 'com.apple.finder'
++run = 'layout floating'
++
+ # Rule with a comment before it
+
+## set rule 1
+@@ -7,6 +7,4 @@
+ [[on-window-detected]]
+-if.app-id = 'com.google.Chrome'
+-if.window-title-regex-substring = 'Picture in Picture'
+-check-further-callbacks = true
+-run = ['layout floating', 'move-node-to-workspace 9']
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
+ 
+
+## string into rules
+error: on-window-detected is an array of tables; its elements must be tables

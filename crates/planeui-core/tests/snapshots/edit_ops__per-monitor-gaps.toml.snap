@@ -1,0 +1,46 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -5,3 +5,3 @@
+ inner.vertical = 10
+-outer.left = [{ monitor.'built-in' = 0 }, 8]
++outer.left = 20
+ outer.right = 8
+
+## set new gaps.outer.planeui = 5
+@@ -13 +13,2 @@
+ outer.bottom = 8
++outer.planeui = 5
+
+## set new root accordion-padding = 12
+@@ -1,2 +1,3 @@
+ config-version = 2
++accordion-padding = 12
+ 
+
+## set new section focus-follows-mouse.enabled = true
+@@ -13 +13,4 @@
+ outer.bottom = 8
++
++[focus-follows-mouse]
++enabled = true
+
+## set new binding mode.main.binding.alt-j
+@@ -13 +13,4 @@
+ outer.bottom = 8
++
++[mode.main.binding]
++alt-j = "focus down"
+
+## remove gaps.outer.left
+@@ -5,3 +5,2 @@
+ inner.vertical = 10
+-outer.left = [{ monitor.'built-in' = 0 }, 8]
+ outer.right = 8
+
+## remove config-version
+@@ -1,2 +1 @@
+-config-version = 2

@@ -1,0 +1,46 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -7,3 +7,3 @@
+ [gaps.outer]
+-left = 8
++left = 20
+ bottom = 8
+
+## set new gaps.outer.planeui = 5
+@@ -11,2 +11,3 @@
+ right = 8
++planeui = 5
+ 
+
+## set new root accordion-padding = 12
+@@ -1,2 +1,3 @@
+ config-version = 2
++accordion-padding = 12
+ 
+
+## set new section focus-follows-mouse.enabled = true
+@@ -22 +22,4 @@
+ r = ['flatten-workspace-tree', 'mode main']
++
++[focus-follows-mouse]
++enabled = true
+
+## set new binding mode.main.binding.alt-j
+@@ -18,2 +18,3 @@
+ alt-l = 'focus right'
++alt-j = "focus down"
+ 
+
+## remove gaps.outer.left
+@@ -7,3 +7,2 @@
+ [gaps.outer]
+-left = 8
+ bottom = 8
+
+## remove config-version
+@@ -1,2 +1 @@
+-config-version = 2

@@ -1,0 +1,39 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 109
+expression: "diffs(\"table-style.toml\", table_edits)"
+---
+## append to esc
+@@ -20,3 +20,3 @@
+ [mode.service.binding]
+-esc = ['reload-config', 'mode main']
++esc = ['reload-config', 'mode main', "mode alt"]
+ r = ['flatten-workspace-tree', 'mode main']
+
+## insert at front of esc
+@@ -20,3 +20,3 @@
+ [mode.service.binding]
+-esc = ['reload-config', 'mode main']
++esc = ["mode alt", 'reload-config', 'mode main']
+ r = ['flatten-workspace-tree', 'mode main']
+
+## remove last of esc
+@@ -20,3 +20,3 @@
+ [mode.service.binding]
+-esc = ['reload-config', 'mode main']
++esc = ['reload-config']
+ r = ['flatten-workspace-tree', 'mode main']
+
+## move esc 1 -> 0
+@@ -20,3 +20,3 @@
+ [mode.service.binding]
+-esc = ['reload-config', 'mode main']
++esc = ['mode main', 'reload-config']
+ r = ['flatten-workspace-tree', 'mode main']
+
+## set esc[0]
+@@ -20,3 +20,3 @@
+ [mode.service.binding]
+-esc = ['reload-config', 'mode main']
++esc = ["reload-config --no-gui", 'mode main']
+ r = ['flatten-workspace-tree', 'mode main']

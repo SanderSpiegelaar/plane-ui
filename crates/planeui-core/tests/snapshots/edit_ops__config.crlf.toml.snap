@@ -1,0 +1,42 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -7,2 +7,3 @@
+ inner.vertical = 10
++outer.left = 20
+ 
+
+## set new gaps.outer.planeui = 5
+@@ -7,2 +7,3 @@
+ inner.vertical = 10
++outer.planeui = 5
+ 
+
+## set new root accordion-padding = 12
+@@ -3,2 +3,3 @@
+ start-at-login = false
++accordion-padding = 12
+ 
+
+## set new section focus-follows-mouse.enabled = true
+@@ -18 +18,4 @@
+   basic"""
++
++[focus-follows-mouse]
++enabled = true
+
+## set new binding mode.main.binding.alt-j
+@@ -18 +18,2 @@
+   basic"""
++alt-j = "focus down"
+
+## remove gaps.outer.left
+error: gaps.outer.left does not exist
+
+## remove config-version
+@@ -1,2 +1 @@
+-config-version = 2
+ # CRLF line endings

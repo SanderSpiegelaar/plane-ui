@@ -1,0 +1,41 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -3,3 +3,3 @@
+ gaps.inner.vertical = 10
+-gaps.outer.left = 8
++gaps.outer.left = 20
+ gaps.outer.bottom = 8
+
+## set new gaps.outer.planeui = 5
+@@ -7,2 +7,3 @@
+ gaps.outer.right = 8
++gaps.outer.planeui = 5
+ key-mapping.preset = 'qwerty'
+
+## set new root accordion-padding = 12
+@@ -12 +12,2 @@
+ mode.service.binding.esc = ['reload-config', 'mode main']
++accordion-padding = 12
+
+## set new section focus-follows-mouse.enabled = true
+
+## set new binding mode.main.binding.alt-j
+@@ -11,2 +11,3 @@
+ mode.main.binding.alt-l = 'focus right'
++mode.main.binding.alt-j = "focus down"
+ mode.service.binding.esc = ['reload-config', 'mode main']
+
+## remove gaps.outer.left
+@@ -3,3 +3,2 @@
+ gaps.inner.vertical = 10
+-gaps.outer.left = 8
+ gaps.outer.bottom = 8
+
+## remove config-version
+@@ -1,2 +1 @@
+-config-version = 2
+ gaps.inner.horizontal = 10

@@ -1,0 +1,61 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 160
+expression: "diffs(name, rule_edits)"
+---
+## append rule
+@@ -14 +14,5 @@
+ run = 'layout tiling'
++
++[[on-window-detected]]
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
+
+## insert rule first
+@@ -3,2 +3,6 @@
+ [[on-window-detected]]
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
++
++[[on-window-detected]]
+ if.app-id = 'com.apple.systempreferences'
+
+## remove rule 0
+@@ -3,11 +3,2 @@
+ [[on-window-detected]]
+-if.app-id = 'com.apple.systempreferences'
+-if.app-name-regex-substring = 'settings'
+-if.window-title-regex-substring = 'substring'
+-if.workspace = 'workspace-name'
+-if.during-aerospace-startup = true
+-check-further-callbacks = true
+-run = ['layout floating', 'move-node-to-workspace S']
+-
+-[[on-window-detected]]
+ if = { app-id = 'org.alacritty' }
+
+## move rule 1 -> 0
+@@ -3,2 +3,6 @@
+ [[on-window-detected]]
++if = { app-id = 'org.alacritty' }
++run = 'layout tiling'
++
++[[on-window-detected]]
+ if.app-id = 'com.apple.systempreferences'
+@@ -10,5 +14 @@
+ run = ['layout floating', 'move-node-to-workspace S']
+-
+-[[on-window-detected]]
+-if = { app-id = 'org.alacritty' }
+-run = 'layout tiling'
+
+## set rule 1
+@@ -12,3 +12,3 @@
+ [[on-window-detected]]
+-if = { app-id = 'org.alacritty' }
+-run = 'layout tiling'
++if = "test %{app-bundle-id} = com.apple.Notes"
++run = "layout floating"
+
+## string into rules
+error: on-window-detected is an array of tables; its elements must be tables

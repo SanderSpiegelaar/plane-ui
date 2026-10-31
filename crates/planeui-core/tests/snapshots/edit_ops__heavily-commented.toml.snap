@@ -1,0 +1,51 @@
+---
+source: crates/planeui-core/tests/edit_ops.rs
+assertion_line: 83
+expression: "diffs(name, KEY_EDITS)"
+---
+## set gaps.outer.left = 20
+@@ -18,3 +18,3 @@
+ 
+-    outer.left = 8
++    outer.left = 20
+ # comment at column zero inside a table
+
+## set new gaps.outer.planeui = 5
+@@ -21,2 +21,3 @@
+     outer.right = 8
++    outer.planeui = 5
+ 
+
+## set new root accordion-padding = 12
+@@ -10,3 +10,3 @@
+ 
+-accordion-padding = 30
++accordion-padding = 12
+ #commented-out-key = 'value'
+
+## set new section focus-follows-mouse.enabled = true
+@@ -28,2 +28,5 @@
+ 
++[focus-follows-mouse]
++enabled = true
++
+ 
+
+## set new binding mode.main.binding.alt-j
+@@ -27,2 +27,3 @@
+ alt-slash = 'layout tiles horizontal vertical' # toggles
++alt-j = "focus down"
+ 
+
+## remove gaps.outer.left
+@@ -18,3 +18,2 @@
+ 
+-    outer.left = 8
+ # comment at column zero inside a table
+
+## remove config-version
+@@ -4,4 +4,2 @@
+ 
+-    # Indented comment before the first key
+-config-version = 2 # trailing comment after a value
+ start-at-login   =   false    #   spaced-out trailing comment
