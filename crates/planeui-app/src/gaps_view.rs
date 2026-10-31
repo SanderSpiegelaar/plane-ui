@@ -1,5 +1,6 @@
-//! Constant gaps, with one pipeline commit for a linked outer edit.
+//! Constant and ordered per-monitor gaps.
 
+use gpui_kit::component::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
@@ -9,15 +10,30 @@ use gpui_kit::{
     Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
     TestSupportExt as _, Window, div,
 };
-use planeui_core::gaps::{GapField, GapValue, reset_gap, set_gap, set_outer_linked};
+use planeui_core::config_doc::ConfigDoc;
+use planeui_core::gaps::{
+    self, GapEditError, GapField, GapValue, reset_gap, set_gap, set_outer_linked,
+};
+use planeui_core::monitors::MonitorPattern;
 
 use crate::config_model::ConfigModel;
 use crate::fields::{CommitField, CommitNumberField, Committed};
+use crate::live_data::LiveData;
+use crate::monitor_picker::{MonitorPicker, PatternPicked};
+
+#[derive(Debug)]
+struct RuleFields {
+    gap: GapField,
+    rows: Vec<(Entity<MonitorPicker>, Entity<CommitNumberField>)>,
+    _subscriptions: Vec<Subscription>,
+}
 
 #[derive(Debug)]
 pub struct GapsView {
     model: Entity<ConfigModel>,
     fields: Vec<(GapField, Entity<CommitNumberField>)>,
+    live_data: Entity<LiveData>,
+    rules: Vec<RuleFields>,
     linked: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
@@ -34,12 +50,18 @@ pub(crate) fn unsigned_number(value: i64) -> Result<(), SharedString> {
 fn effective(value: &GapValue) -> i64 {
     match value {
         GapValue::Const(value) => i64::from(*value),
+        GapValue::PerMonitor(value) => i64::from(value.default),
         _ => 0,
     }
 }
 
 impl GapsView {
-    pub fn new(model: Entity<ConfigModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        model: Entity<ConfigModel>,
+        live_data: Entity<LiveData>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut subscriptions = Vec::new();
         let fields = GapField::ALL
             .into_iter()
@@ -72,20 +94,123 @@ impl GapsView {
             {
                 this.linked = false;
             }
+            this.sync_rules(window, cx);
             cx.notify();
         }));
-        Self {
+        let mut this = Self {
             model,
             fields,
+            live_data,
+            rules: Vec::new(),
             linked: false,
             error: None,
             _subscriptions: subscriptions,
+        };
+        this.sync_rules(window, cx);
+        this
+    }
+
+    fn sync_rules(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for gap in GapField::ALL {
+            let value = self.model.read(cx).view().gaps.get(gap).clone();
+            let GapValue::PerMonitor(value) = value else {
+                self.rules.retain(|fields| fields.gap != gap);
+                continue;
+            };
+            if let Some(fields) = self.rules.iter().find(|fields| fields.gap == gap)
+                && fields.rows.len() == value.rules.len()
+            {
+                for ((picker, field), (pattern, value)) in fields.rows.iter().zip(&value.rules) {
+                    picker.update(cx, |picker, cx| picker.set_value(pattern, window, cx));
+                    field.update(cx, |field, cx| {
+                        if *field.committed() != i64::from(*value) {
+                            field.set_value(i64::from(*value), window, cx);
+                        }
+                    });
+                }
+                continue;
+            }
+            self.rules.retain(|fields| fields.gap != gap);
+            let mut subscriptions = Vec::new();
+            let rows = value
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(index, (pattern, value))| {
+                    let picker = cx.new(|cx| {
+                        MonitorPicker::new(self.live_data.clone(), Some(pattern), window, cx)
+                    });
+                    let field = cx.new(|cx| {
+                        CommitField::number(i64::from(*value), unsigned_number, window, cx)
+                    });
+                    subscriptions.push(cx.subscribe(
+                        &picker,
+                        move |this: &mut Self, _, event: &PatternPicked, cx| {
+                            if let GapValue::PerMonitor(value) =
+                                this.model.read(cx).view().gaps.get(gap)
+                                && let Some((_, value)) = value.rules.get(index)
+                            {
+                                let value = *value;
+                                this.edit(
+                                    "Set gap monitor",
+                                    |doc| gaps::set_gap_rule(doc, gap, index, &event.0, value),
+                                    cx,
+                                );
+                            }
+                        },
+                    ));
+                    subscriptions.push(cx.subscribe(
+                        &field,
+                        move |this: &mut Self, _, event: &Committed<i64>, cx| {
+                            if let Ok(value) = u32::try_from(event.0)
+                                && let GapValue::PerMonitor(current) =
+                                    this.model.read(cx).view().gaps.get(gap)
+                                && let Some((pattern, _)) = current.rules.get(index)
+                            {
+                                let pattern = pattern.clone();
+                                this.edit(
+                                    "Set monitor gap",
+                                    |doc| gaps::set_gap_rule(doc, gap, index, &pattern, value),
+                                    cx,
+                                );
+                            }
+                        },
+                    ));
+                    (picker, field)
+                })
+                .collect();
+            self.rules.push(RuleFields {
+                gap,
+                rows,
+                _subscriptions: subscriptions,
+            });
         }
+    }
+
+    fn edit(
+        &mut self,
+        label: &str,
+        change: impl FnOnce(&mut ConfigDoc) -> Result<(), GapEditError>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut doc = self.model.read(cx).doc().clone();
+        self.error = change(&mut doc).err().map(|error| error.to_string().into());
+        if self.error.is_none() {
+            self.model.update(cx, |model, cx| {
+                model.commit(doc, label, cx);
+            });
+        }
+        cx.notify();
     }
 
     fn set(&mut self, gap: GapField, value: u32, cx: &mut Context<Self>) {
         let mut doc = self.model.read(cx).doc().clone();
-        let result = if self.linked && GapField::OUTER.contains(&gap) {
+        let result = if matches!(
+            self.model.read(cx).view().gaps.get(gap),
+            GapValue::PerMonitor(_)
+        ) {
+            gaps::set_gap_default(&mut doc, gap, value)
+        } else if self.linked && GapField::OUTER.contains(&gap) {
             set_outer_linked(&mut doc, value)
         } else {
             set_gap(&mut doc, gap, value)
@@ -178,17 +303,12 @@ impl GapsView {
         let path = gap.path().to_string();
         let label = gap.path().segments().last().cloned().unwrap_or_default();
         let editor = match &value {
-            GapValue::PerMonitor(_) => v_flex()
-                .gap_1()
-                .child(
-                    self.model
-                        .read(cx)
-                        .doc()
-                        .get(&gap.path())
-                        .map(|item| item.to_string().trim().to_owned())
-                        .unwrap_or_default(),
-                )
-                .child("per-monitor (editable in a later version)")
+            GapValue::PerMonitor(value) => self
+                .per_monitor_editor(gap, field, value, cx)
+                .into_any_element(),
+            GapValue::Invalid { raw } => div()
+                .text_color(cx.theme().danger)
+                .child(raw.clone())
                 .into_any_element(),
             _ => div()
                 .id(SharedString::from(path))
@@ -197,36 +317,149 @@ impl GapsView {
                 .child(field.clone())
                 .into_any_element(),
         };
-        h_flex()
+        v_flex()
             .gap_4()
-            .items_start()
-            .child(div().w_24().child(label))
+            .child(
+                h_flex().gap_4().child(div().w_24().child(label)).child(
+                    Switch::new(SharedString::from(format!("per-monitor-{gap:?}")))
+                        .label("Per monitor")
+                        .checked(matches!(value, GapValue::PerMonitor(_)))
+                        .disabled(matches!(value, GapValue::Invalid { .. }))
+                        .on_change(cx.listener(move |this, enabled, _, cx| {
+                            this.linked = false;
+                            this.edit(
+                                "Change gap mode",
+                                |doc| {
+                                    if *enabled {
+                                        gaps::switch_to_per_monitor(doc, gap)
+                                    } else {
+                                        gaps::switch_to_constant(doc, gap)
+                                    }
+                                },
+                                cx,
+                            );
+                        })),
+                ),
+            )
             .child(editor)
-            .when(matches!(value, GapValue::Absent), |row| {
+            .when(matches!(value, GapValue::Const(_)), |row| {
                 row.child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("default: 0"),
+                    Button::new(SharedString::from(format!("reset-{gap:?}")))
+                        .label("Reset to default")
+                        .on_click(cx.listener(move |this, _, _, cx| this.reset(gap, cx))),
                 )
             })
-            .when(
-                matches!(value, GapValue::Const(_) | GapValue::Invalid { .. }),
-                |row| {
-                    row.child(
-                        Button::new(SharedString::from(format!("reset-{gap:?}")))
-                            .label("Reset to default")
-                            .on_click(cx.listener(move |this, _, _, cx| this.reset(gap, cx))),
-                    )
-                },
-            )
-            .when_some(
-                match value {
-                    GapValue::Invalid { raw } => Some(raw),
-                    _ => None,
-                },
-                |row, raw| row.child(div().text_color(cx.theme().danger).child(raw)),
-            )
             .into_any_element()
+    }
+
+    fn per_monitor_editor(
+        &self,
+        gap: GapField,
+        field: &Entity<CommitNumberField>,
+        value: &gaps::PerMonitor,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let rows = self
+            .rules
+            .iter()
+            .find(|fields| fields.gap == gap)
+            .into_iter()
+            .flat_map(|fields| fields.rows.iter())
+            .enumerate()
+            .map(|(index, fields)| {
+                Self::rule_row(gap, index, value.rules.len(), fields, cx).into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let default = value.default;
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_2()
+            .children(rows)
+            .child(
+                h_flex().gap_2().child(div().w_24().child("Default")).child(
+                    div()
+                        .id(SharedString::from(gap.path().to_string()))
+                        .test_support()
+                        .w_40()
+                        .child(field.clone()),
+                ),
+            )
+            .child(
+                Button::new(SharedString::from(format!("add-rule-{gap:?}")))
+                    .label("Add monitor")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit(
+                            "Add gap rule",
+                            |doc| gaps::add_gap_rule(doc, gap, &MonitorPattern::Main, default),
+                            cx,
+                        );
+                    })),
+            )
+    }
+
+    fn rule_row(
+        gap: GapField,
+        index: usize,
+        count: usize,
+        fields: &(Entity<MonitorPicker>, Entity<CommitNumberField>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .id(SharedString::from(format!("{}-rule-{index}", gap.path())))
+            .test_support()
+            .items_start()
+            .gap_2()
+            .child(div().flex_1().min_w_0().child(fields.0.clone()))
+            .child(
+                div()
+                    .id("gap-rule-value")
+                    .test_support()
+                    .w_24()
+                    .child(fields.1.clone()),
+            )
+            .child(
+                Button::new(("gap-up", index))
+                    .icon(IconName::ChevronUp)
+                    .accessibility_label("Move up")
+                    .tooltip("Move up")
+                    .disabled(index == 0)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit(
+                            "Move gap rule up",
+                            |doc| gaps::move_gap_rule(doc, gap, index, index.saturating_sub(1)),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new(("gap-down", index))
+                    .icon(IconName::ChevronDown)
+                    .accessibility_label("Move down")
+                    .tooltip("Move down")
+                    .disabled(index + 1 == count)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit(
+                            "Move gap rule down",
+                            |doc| gaps::move_gap_rule(doc, gap, index, index + 1),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new(("gap-remove", index))
+                    .icon(IconName::Close)
+                    .accessibility_label("Remove monitor")
+                    .tooltip("Remove monitor")
+                    .disabled(count == 1)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit(
+                            "Remove gap rule",
+                            |doc| gaps::remove_gap_rule(doc, gap, index),
+                            cx,
+                        );
+                    })),
+            )
     }
 }
 
@@ -285,11 +518,135 @@ mod tests {
     use gpui_kit::test::TestWindowExt as _;
 
     #[gpui_kit::test]
+    fn monitor_gap_patterns_and_values_validate_inline(cx: &mut TestAppContext) {
+        let original = "[gaps.inner]\nhorizontal = [{ monitor.main = 4 }, 8] # keep\n";
+        let fixture = Fixture::new(original);
+        let model = fixture.model(cx);
+        let live_data = fixture.live_data(cx);
+        let (window, _) = open_window(cx, |window, cx| GapsView::new(model, live_data, window, cx));
+        in_window(cx, window, |window, cx| {
+            window.click("monitor-pattern", cx);
+            window.press("cmd-a", cx);
+            window.input("secondary", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            original.replace("monitor.main", "monitor.secondary")
+        );
+        in_window(cx, window, |window, cx| {
+            window.click("gap-rule-value", cx);
+            window.press("cmd-a", cx);
+            window.input("-1", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            original.replace("monitor.main", "monitor.secondary")
+        );
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn per_monitor_toggle_round_trip_and_two_undos_preserve_bytes(cx: &mut TestAppContext) {
+        let original = "[gaps.inner]\nhorizontal = 0x10 # keep\n";
+        let fixture = Fixture::new(original);
+        let model = fixture.model(cx);
+        let live_data = fixture.live_data(cx);
+        let (window, _) = open_window(cx, |window, cx| {
+            GapsView::new(model.clone(), live_data, window, cx)
+        });
+        in_window(cx, window, |window, cx| {
+            window.click("per-monitor-InnerHorizontal", cx);
+        });
+        cx.run_until_parked();
+        let per_monitor = fixture.disk();
+        assert_eq!(
+            per_monitor,
+            "[gaps.inner]\nhorizontal = [{ monitor.main = 16 }, 16] # keep\n"
+        );
+        in_window(cx, window, |window, cx| {
+            window.click("per-monitor-InnerHorizontal", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), "[gaps.inner]\nhorizontal = 16 # keep\n");
+        assert_eq!(fixture.aerospace.reload_count(), 2);
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), per_monitor);
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original);
+        assert_eq!(fixture.aerospace.reload_count(), 4);
+    }
+
+    #[gpui_kit::test]
+    fn monitor_gap_rows_commit_reorder_and_remove(cx: &mut TestAppContext) {
+        let original = "[gaps.inner]\nhorizontal = [{ monitor.main = 4 }, 8] # keep\n";
+        let fixture = Fixture::new(original);
+        let model = fixture.model(cx);
+        let live_data = fixture.live_data(cx);
+        let (window, _) = open_window(cx, |window, cx| {
+            GapsView::new(model.clone(), live_data, window, cx)
+        });
+        in_window(cx, window, |window, cx| {
+            window.click("gap-rule-value", cx);
+            window.press("cmd-a", cx);
+            window.input("12", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original.replace("main = 4", "main = 12"));
+        in_window(cx, window, |window, cx| {
+            window.click("add-rule-InnerHorizontal", cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.click(("gap-down", 0_usize), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[gaps.inner]\nhorizontal = [{ monitor.main = 8 }, { monitor.main = 12 }, 8] # keep\n"
+        );
+        in_window(cx, window, |window, cx| {
+            window.click(("gap-remove", 1_usize), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[gaps.inner]\nhorizontal = [{ monitor.main = 8 }, 8] # keep\n"
+        );
+        in_window(cx, window, |window, cx| {
+            window.click("gaps.inner.horizontal", cx);
+            window.press("cmd-a", cx);
+            window.input("20", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[gaps.inner]\nhorizontal = [{ monitor.main = 8 }, 20] # keep\n"
+        );
+        assert_eq!(fixture.aerospace.reload_count(), 5);
+        for _ in 0..5 {
+            model.update(cx, ConfigModel::undo);
+            cx.run_until_parked();
+        }
+        assert_eq!(fixture.disk(), original);
+    }
+
+    #[gpui_kit::test]
     fn linked_outer_is_one_write_and_undo(cx: &mut TestAppContext) {
         let original = "[gaps.outer]\nleft = 0\nright = 0\ntop = 0\nbottom = 0\n";
         let fixture = Fixture::new(original);
         let model = fixture.model(cx);
-        let (window, view) = open_window(cx, |window, cx| GapsView::new(model.clone(), window, cx));
+        let live_data = fixture.live_data(cx);
+        let (window, view) = open_window(cx, |window, cx| {
+            GapsView::new(model.clone(), live_data, window, cx)
+        });
         in_window(cx, window, |window, cx| {
             window.click("link-outer", cx);
             window.click("gaps.outer.left", cx);
@@ -315,7 +672,8 @@ mod tests {
         let original = "[gaps.outer]\nleft = 4\nright = 8\ntop = 4\nbottom = 8\n";
         let fixture = Fixture::new(original);
         let model = fixture.model(cx);
-        let (window, _) = open_window(cx, |window, cx| GapsView::new(model, window, cx));
+        let live_data = fixture.live_data(cx);
+        let (window, _) = open_window(cx, |window, cx| GapsView::new(model, live_data, window, cx));
         in_window(cx, window, |window, cx| window.click("link-outer", cx));
         cx.run_until_parked();
         assert_eq!(fixture.disk(), original);

@@ -17,6 +17,7 @@ use planeui_core::store::{ConfigStore, PathEnv, ResolvedConfig, SnapshotStore};
 use tempfile::TempDir;
 
 use crate::config_model::ConfigModel;
+use crate::live_data::LiveData;
 use crate::startup::{Session, open_session};
 
 pub struct Fixture {
@@ -60,6 +61,10 @@ impl Fixture {
 
     pub fn prefs_store(&self) -> PrefsStore {
         PrefsStore::new(self.prefs_path.clone())
+    }
+
+    pub fn live_data(&self, cx: &mut TestAppContext) -> Entity<LiveData> {
+        cx.new(|cx| LiveData::new(self.aerospace.clone(), cx))
     }
 
     pub fn disk(&self) -> String {

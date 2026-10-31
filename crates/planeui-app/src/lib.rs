@@ -8,6 +8,7 @@ mod gaps_view;
 mod general_view;
 pub mod keybindings;
 pub mod live_data;
+mod monitor_picker;
 pub mod shell;
 pub mod snapshots;
 pub mod startup;

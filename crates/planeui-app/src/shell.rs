@@ -126,8 +126,9 @@ impl Shell {
         let live_data = cx.new(|cx| LiveData::new(aerospace, cx));
         let general = cx.new(|cx| GeneralView::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
-        let gaps = cx.new(|cx| GapsView::new(model.clone(), window, cx));
-        let workspaces = cx.new(|cx| WorkspacesView::new(model.clone(), window, cx));
+        let gaps = cx.new(|cx| GapsView::new(model.clone(), live_data.clone(), window, cx));
+        let workspaces =
+            cx.new(|cx| WorkspacesView::new(model.clone(), live_data.clone(), window, cx));
         // Undo and Redo dispatch from the focused element, so the shell holds focus until a
         // control takes it.
         let focus_handle = cx.focus_handle();
