@@ -236,15 +236,22 @@ impl ConfigDoc {
             ArrayMut::Tables(tables) => {
                 check_index(path, from, tables.len(), false)?;
                 check_index(path, to, tables.len(), false)?;
-                // Each element owns its header and its `[array.sub]` tables; hand the same
-                // positions out again in the new order so sub-tables move with their element.
-                let mut positions: Vec<isize> = tables.iter().flat_map(section_positions).collect();
-                positions.sort_unstable();
+                // Each element owns its header and its `[array.sub]` tables. The elements' slots
+                // are dealt out again in the new order; within an element, its tables keep
+                // their relative order by rank, so sub-tables move with their element.
+                let mut groups: Vec<Vec<isize>> = tables.iter().map(section_positions).collect();
+                let mut slots: Vec<isize> = groups.iter().flatten().copied().collect();
+                slots.sort_unstable();
                 let moved = tables.remove(from);
                 tables.insert(to, moved);
-                let mut positions = positions.into_iter();
-                for table in tables.iter_mut() {
-                    reassign_positions(table, &mut positions);
+                let moved_group = groups.remove(from);
+                groups.insert(to, moved_group);
+                let mut slots = slots.into_iter();
+                for (table, mut group) in tables.iter_mut().zip(groups) {
+                    group.sort_unstable();
+                    let mapping: Vec<(isize, isize)> =
+                        group.into_iter().zip(slots.by_ref()).collect();
+                    remap_positions(table, &mapping);
                 }
             }
         }
@@ -447,20 +454,21 @@ fn section_positions(table: &Table) -> Vec<isize> {
     positions
 }
 
-/// Gives `table` and its nested headers the next positions, in the order
-/// [`section_positions`] reads them.
-fn reassign_positions(table: &mut Table, positions: &mut impl Iterator<Item = isize>) {
-    if table.position().is_some()
-        && let Some(position) = positions.next()
-    {
-        table.set_position(Some(position));
+/// Moves `table` and its nested headers from their old positions to new ones.
+fn remap_positions(table: &mut Table, mapping: &[(isize, isize)]) {
+    let new_position = table
+        .position()
+        .and_then(|old| mapping.iter().find(|(from, _)| *from == old))
+        .map(|(_, to)| *to);
+    if new_position.is_some() {
+        table.set_position(new_position);
     }
     for (_, item) in table.iter_mut() {
         match item {
-            Item::Table(child) => reassign_positions(child, positions),
+            Item::Table(child) => remap_positions(child, mapping),
             Item::ArrayOfTables(children) => {
                 for child in children.iter_mut() {
-                    reassign_positions(child, positions);
+                    remap_positions(child, mapping);
                 }
             }
             _ => {}
@@ -1165,6 +1173,23 @@ mod tests {
             document.array_insert(&path, 2, Value::InlineTable(rule))
         });
         assert_eq!(appended, format!("{source}\n[[r]]\nrun = \"c\"\n"));
+    }
+
+    #[test]
+    fn moving_keeps_each_elements_sub_table_order() {
+        let source = "[[a]]\nid=1\n[a.x]\nv=1\n[a.y]\nv=2\n[a.x.z]\nv=3\n[[a]]\nid=2\n[a.x]\nv=4\n";
+        let path = KeyPath::from(["a"]);
+        assert_eq!(
+            edited(source, |document| document.array_move(&path, 0, 0)),
+            source
+        );
+        let there = edited(source, |document| document.array_move(&path, 0, 1));
+        assert_eq!(
+            there,
+            "[[a]]\nid=2\n[a.x]\nv=4\n[[a]]\nid=1\n[a.x]\nv=1\n[a.y]\nv=2\n[a.x.z]\nv=3\n"
+        );
+        let back = edited(&there, |document| document.array_move(&path, 1, 0));
+        assert_eq!(back, source);
     }
 
     #[test]
