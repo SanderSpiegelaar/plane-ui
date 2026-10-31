@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 toml_edit.workspace = true
 thiserror.workspace = true

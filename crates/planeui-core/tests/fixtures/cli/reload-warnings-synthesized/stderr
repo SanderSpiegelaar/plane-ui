@@ -1,0 +1,1 @@
+[WARNING] The current 'config-version = 1' is outdated. Please consider migrating to 'config-version = 2'. See https://nikitabobko.github.io/AeroSpace/guide#config-version for the migration guide.
