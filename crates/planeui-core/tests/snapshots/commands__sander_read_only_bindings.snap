@@ -1,0 +1,5 @@
+---
+source: crates/planeui-core/tests/commands.rs
+expression: "read_only_bindings(include_str!(\"fixtures/sander.toml\")).unwrap()"
+---
+[]
