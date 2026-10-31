@@ -23,6 +23,7 @@ use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigMode
 use crate::gaps_view::GapsView;
 use crate::general_view::{AutoReloadEnabled, GeneralView};
 use crate::keybindings::KeybindingsView;
+use crate::live_data::LiveData;
 use crate::snapshots::SnapshotsView;
 use crate::workspaces_view::WorkspacesView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
@@ -92,6 +93,7 @@ impl Section {
 #[derive(Debug)]
 pub struct Shell {
     model: Entity<ConfigModel>,
+    live_data: Entity<LiveData>,
     section: Section,
     general: Entity<GeneralView>,
     keybindings: Entity<KeybindingsView>,
@@ -118,6 +120,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let aerospace = model.read(cx).aerospace_client();
+        let live_data = cx.new(|cx| LiveData::new(aerospace, cx));
         let general = cx.new(|cx| GeneralView::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
         let gaps = cx.new(|cx| GapsView::new(model.clone(), window, cx));
@@ -141,11 +145,13 @@ impl Shell {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     this.model.update(cx, ConfigModel::check_disk);
+                    this.live_data.update(cx, LiveData::refresh);
                 }
             }),
         ];
         Self {
             model,
+            live_data,
             section: Section::Keybindings,
             general,
             keybindings,
@@ -165,6 +171,12 @@ impl Shell {
     #[must_use]
     pub fn section(&self) -> Section {
         self.section
+    }
+
+    /// Shared live data for form pickers and monitor previews.
+    #[must_use]
+    pub fn live_data(&self) -> &Entity<LiveData> {
+        &self.live_data
     }
 
     /// Shows `section`.
@@ -524,6 +536,23 @@ mod tests {
             window.render_frame(cx);
             window.find(id).label().unwrap_or_default().to_owned()
         })
+    }
+
+    #[gpui_kit::test]
+    fn window_activation_refreshes_live_data_after_the_throttle(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(ORIGINAL);
+        let (window, _) = open_shell(cx, &fixture);
+        assert_eq!(fixture.aerospace.list_count(), 3);
+        let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
+        visual.deactivate_window();
+        in_window(cx, window, |window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(fixture.aerospace.list_count(), 3);
+        cx.executor().advance_clock(Duration::from_secs(3));
+        visual.deactivate_window();
+        in_window(cx, window, |window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(fixture.aerospace.list_count(), 6);
     }
 
     #[gpui_kit::test]

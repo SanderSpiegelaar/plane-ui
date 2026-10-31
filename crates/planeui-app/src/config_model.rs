@@ -226,6 +226,12 @@ impl ConfigModel {
         &self.aerospace
     }
 
+    pub(crate) fn aerospace_client(
+        &self,
+    ) -> std::sync::Arc<dyn planeui_core::aerospace::Aerospace> {
+        self.context.aerospace.clone()
+    }
+
     /// Where a copy of the file is kept before each write.
     #[must_use]
     pub fn snapshots(&self) -> &SnapshotStore {

@@ -7,6 +7,7 @@ pub mod fields;
 mod gaps_view;
 mod general_view;
 pub mod keybindings;
+pub mod live_data;
 pub mod shell;
 pub mod snapshots;
 pub mod startup;
