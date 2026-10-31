@@ -20,8 +20,8 @@ use planeui_core::prefs::{Prefs, PrefsStore};
 use planeui_core::store::UtcDateTime;
 
 use crate::config_model::{AerospaceInfo, AerospaceState, ConfigEvent, ConfigModel, SaveStatus};
-use crate::debug_control::AccordionPaddingControl;
 use crate::gaps_view::GapsView;
+use crate::general_view::{AutoReloadEnabled, GeneralView};
 use crate::keybindings::KeybindingsView;
 use crate::snapshots::SnapshotsView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
@@ -92,7 +92,7 @@ impl Section {
 pub struct Shell {
     model: Entity<ConfigModel>,
     section: Section,
-    padding_control: Entity<AccordionPaddingControl>,
+    general: Entity<GeneralView>,
     keybindings: Entity<KeybindingsView>,
     gaps: Entity<GapsView>,
     /// Built when the Snapshots section opens and dropped when it closes, so the list is read
@@ -116,7 +116,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let padding_control = cx.new(|cx| AccordionPaddingControl::new(model.clone(), window, cx));
+        let general = cx.new(|cx| GeneralView::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
         let gaps = cx.new(|cx| GapsView::new(model.clone(), window, cx));
         // Undo and Redo dispatch from the focused element, so the shell holds focus until a
@@ -124,6 +124,13 @@ impl Shell {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         let subscriptions = vec![
+            cx.subscribe_in(
+                &general,
+                window,
+                |this, _, _: &AutoReloadEnabled, window, cx| {
+                    this.keep_auto_reload(window, cx);
+                },
+            ),
             cx.observe(&model, |_, _, cx| cx.notify()),
             cx.subscribe_in(&model, window, |_, _, event: &ConfigEvent, window, cx| {
                 window.push_notification(notification(event), cx);
@@ -137,7 +144,7 @@ impl Shell {
         Self {
             model,
             section: Section::Keybindings,
-            padding_control,
+            general,
             keybindings,
             gaps,
             snapshots: None,
@@ -328,7 +335,7 @@ impl Shell {
         let body = match (self.section, &self.snapshots) {
             (Section::Keybindings, _) => self.keybindings.clone().into_any_element(),
             (Section::Gaps, _) => self.gaps.clone().into_any_element(),
-            (Section::General, _) => self.padding_control.clone().into_any_element(),
+            (Section::General, _) => self.general.clone().into_any_element(),
             (Section::Snapshots, Some(snapshots)) => snapshots.clone().into_any_element(),
             _ => div()
                 .text_color(cx.theme().muted_foreground)
@@ -673,6 +680,29 @@ mod tests {
             let (window, _) = open_shell(cx, &fixture);
             assert!(!banner_shown(cx, window), "{text}");
         }
+    }
+
+    #[gpui_kit::test]
+    fn enabling_auto_reload_in_general_remembers_keep_on(cx: &mut TestAppContext) {
+        let fixture = Fixture::new("auto-reload-config = false\n");
+        let (window, shell) = open_shell(cx, &fixture);
+        in_window(cx, window, |window, cx| {
+            shell.update(cx, |shell, cx| shell.select(Section::General, window, cx));
+            window.click("auto-reload-config", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), "auto-reload-config = true\n");
+        assert!(!banner_shown(cx, window));
+        let path = model(cx, &shell).read_with(cx, |model, _| model.display_path().to_path_buf());
+        assert!(
+            fixture
+                .prefs_store()
+                .load()
+                .unwrap()
+                .is_auto_reload_dismissed(&path)
+        );
+        let (next_window, _) = open_shell(cx, &fixture);
+        assert!(!banner_shown(cx, next_window));
     }
 
     #[gpui_kit::test]

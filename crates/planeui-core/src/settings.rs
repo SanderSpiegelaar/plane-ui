@@ -109,6 +109,30 @@ pub enum SettingKind {
     Preset,
 }
 
+impl SettingKind {
+    /// Allowed choices for a select control; empty for numbers and switches.
+    #[must_use]
+    pub const fn choices(self) -> &'static [SettingValue] {
+        match self {
+            Self::Layout => &[
+                SettingValue::Layout(Layout::Tiles),
+                SettingValue::Layout(Layout::Accordion),
+            ],
+            Self::Orientation => &[
+                SettingValue::Orientation(Orientation::Horizontal),
+                SettingValue::Orientation(Orientation::Vertical),
+                SettingValue::Orientation(Orientation::Auto),
+            ],
+            Self::Preset => &[
+                SettingValue::Preset(Preset::Qwerty),
+                SettingValue::Preset(Preset::Dvorak),
+                SettingValue::Preset(Preset::Colemak),
+            ],
+            Self::Bool | Self::Count => &[],
+        }
+    }
+}
+
 /// A validated scalar setting value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingValue {
