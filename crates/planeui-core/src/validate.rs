@@ -30,6 +30,8 @@ pub enum IssueKind {
     DeprecatedKey,
     /// A known key with a value of the wrong type (L1).
     WrongType,
+    /// A typed scalar has an unsupported value.
+    InvalidValue,
     /// A binding key cannot be parsed as an AeroSpace chord.
     InvalidChord,
     /// Two keys in one mode resolve to the same chord.
@@ -91,6 +93,7 @@ pub type Rule = fn(&ConfigDoc, &ConfigView, &mut Vec<ValidationIssue>);
 pub const RULES: &[Rule] = &[
     schema,
     gap_values,
+    setting_values,
     invalid_chords,
     duplicate_chords,
     mode_references,
@@ -109,6 +112,26 @@ fn gap_values(_: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue
                 span: None,
                 severity: Severity::Error,
                 kind: IssueKind::WrongType,
+            });
+        }
+    }
+}
+
+fn setting_values(document: &ConfigDoc, view: &ConfigView, issues: &mut Vec<ValidationIssue>) {
+    for setting in crate::settings::Setting::ALL {
+        let path = KeyPath::new(setting.spec().path.iter().copied());
+        if let Some(item) = document.get(&path)
+            && crate::config_view::key_spec(&path)
+                .and_then(|spec| spec.value_type)
+                .is_some_and(|kind| kind.matches(item))
+            && let crate::config_view::Field::Invalid { span, .. } = view.general.setting(setting)
+        {
+            issues.push(ValidationIssue {
+                message: format!("{path} has an invalid value"),
+                key_path: Some(path),
+                span: span.clone(),
+                severity: Severity::Error,
+                kind: IssueKind::InvalidValue,
             });
         }
     }

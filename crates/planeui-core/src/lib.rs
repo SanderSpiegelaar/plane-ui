@@ -11,5 +11,6 @@ pub mod gaps;
 pub mod history;
 pub mod keys;
 pub mod prefs;
+pub mod settings;
 pub mod store;
 pub mod validate;

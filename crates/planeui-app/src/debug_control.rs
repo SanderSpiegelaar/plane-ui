@@ -65,9 +65,12 @@ fn padding(model: &ConfigModel) -> i64 {
     model
         .view()
         .general
-        .accordion_padding
+        .setting(planeui_core::settings::Setting::AccordionPadding)
         .value()
-        .copied()
+        .and_then(|value| match value {
+            planeui_core::settings::SettingValue::Count(value) => Some(i64::from(*value)),
+            _ => None,
+        })
         .unwrap_or(DEFAULT_ACCORDION_PADDING)
 }
 
@@ -89,7 +92,9 @@ impl Render for AccordionPaddingControl {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Debug control: each change is validated, snapshotted, written and reloaded."),
+                    .child(
+                    "Debug control: each change is validated, snapshotted, written and reloaded.",
+                ),
             )
             .child(
                 div()

@@ -1,0 +1,8 @@
+---
+source: crates/planeui-core/tests/setting_ops.rs
+assertion_line: 26
+expression: "TextDiff::from_lines(source,\n&output).unified_diff().context_radius(1).to_string()"
+---
+@@ -2,2 +2,3 @@
+ unknown = 'untouched'
++accordion-padding = 30

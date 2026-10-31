@@ -234,7 +234,12 @@ impl Shell {
 
     fn render_auto_reload_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let model = self.model.read(cx);
-        let auto_reload = model.view().general.auto_reload_config.value() == Some(&true);
+        let auto_reload = model
+            .view()
+            .general
+            .setting(planeui_core::settings::Setting::AutoReloadConfig)
+            .value()
+            == Some(&planeui_core::settings::SettingValue::Bool(true));
         if !auto_reload || self.prefs.is_auto_reload_dismissed(model.display_path()) {
             return None;
         }

@@ -10,6 +10,7 @@ use crate::commands::{ParsedScript, Script};
 use crate::config_doc::{ConfigDoc, KeyPath};
 use crate::gaps::{GapField, GapValue};
 use crate::keys::{Chord, ChordError, KeyMapping, ModeName};
+use crate::settings::{Setting, SettingValue};
 
 /// A value with the byte range it came from in the rendered document, for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,15 +276,23 @@ pub struct CataloguedKey {
     pub spec: Option<&'static KeySpec>,
 }
 
-/// General settings (filled in by PUI-042).
+/// Typed general settings. Invalid fields do not hide valid neighbours.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct General {
     /// `config-version`.
     pub config_version: Field<i64>,
-    /// `accordion-padding`.
-    pub accordion_padding: Field<i64>,
-    /// `auto-reload-config`.
-    pub auto_reload_config: Field<bool>,
+    settings: Vec<(Setting, Field<SettingValue>)>,
+}
+
+impl General {
+    /// The field for a setting, including its source span.
+    #[must_use]
+    pub fn setting(&self, setting: Setting) -> &Field<SettingValue> {
+        self.settings
+            .iter()
+            .find_map(|(key, field)| (*key == setting).then_some(field))
+            .unwrap_or(&Field::Missing)
+    }
 }
 
 /// The six gap leaves, including read-only per-monitor values.
@@ -397,8 +406,17 @@ impl ConfigView {
         let field = |name: &str| (document.get(&KeyPath::from([name])), spans(&[name]));
         let general = General {
             config_version: typed(field("config-version"), Item::as_integer),
-            accordion_padding: typed(field("accordion-padding"), Item::as_integer),
-            auto_reload_config: typed(field("auto-reload-config"), Item::as_bool),
+            settings: Setting::ALL
+                .into_iter()
+                .map(|setting| {
+                    let path = setting.spec().path;
+                    let item = document.get(&KeyPath::new(path.iter().copied()));
+                    (
+                        setting,
+                        typed((item, spans(path)), |item| setting.read(item)),
+                    )
+                })
+                .collect(),
         };
 
         let key_mapping = KeyMapping::from_doc(document);
@@ -587,13 +605,16 @@ mod tests {
         let source = "accordion-padding = 'wide'\nauto-reload-config = true\n";
         let view = view(source);
         assert_eq!(
-            view.general.accordion_padding,
+            *view.general.setting(Setting::AccordionPadding),
             Field::Invalid {
                 span: Some(20..26),
                 raw: "'wide'".to_owned()
             }
         );
-        assert_eq!(view.general.auto_reload_config.value(), Some(&true));
+        assert_eq!(
+            view.general.setting(Setting::AutoReloadConfig).value(),
+            Some(&SettingValue::Bool(true))
+        );
         assert_eq!(view.general.config_version, Field::Missing);
     }
 

@@ -224,6 +224,29 @@ pub enum Preset {
     Colemak,
 }
 
+impl Preset {
+    /// The AeroSpace spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Qwerty => "qwerty",
+            Self::Dvorak => "dvorak",
+            Self::Colemak => "colemak",
+        }
+    }
+
+    /// Parses an AeroSpace preset spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "qwerty" => Some(Self::Qwerty),
+            "dvorak" => Some(Self::Dvorak),
+            "colemak" => Some(Self::Colemak),
+            _ => None,
+        }
+    }
+}
+
 /// A mapping preset and explicit notation-to-key-code overrides in document order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyMapping {
@@ -238,14 +261,11 @@ impl KeyMapping {
     /// Invalid alias names, non-string targets, and unknown targets are skipped.
     #[must_use]
     pub fn from_doc(document: &ConfigDoc) -> Self {
-        let preset = match document
+        let preset = document
             .get(&KeyPath::from(["key-mapping", "preset"]))
             .and_then(toml_edit::Item::as_str)
-        {
-            Some("dvorak") => Preset::Dvorak,
-            Some("colemak") => Preset::Colemak,
-            _ => Preset::Qwerty,
-        };
+            .and_then(Preset::parse)
+            .unwrap_or_default();
         let aliases = document
             .get(&KeyPath::from(["key-mapping", "key-notation-to-key-code"]))
             .and_then(toml_edit::Item::as_table_like)
