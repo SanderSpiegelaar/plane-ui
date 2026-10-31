@@ -12,6 +12,7 @@ pub mod snapshots;
 pub mod startup;
 #[cfg(test)]
 mod test_support;
+mod workspaces_view;
 
 use anyhow::Context as _;
 use gpui_kit::component::Theme;

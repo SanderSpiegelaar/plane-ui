@@ -300,4 +300,20 @@ mod tests {
             }
         });
     }
+
+    #[gpui_kit::test]
+    fn different_outer_values_wait_for_a_choice(cx: &mut TestAppContext) {
+        let original = "[gaps.outer]\nleft = 4\nright = 8\ntop = 4\nbottom = 8\n";
+        let fixture = Fixture::new(original);
+        let model = fixture.model(cx);
+        let (window, _) = open_window(cx, |window, cx| GapsView::new(model, window, cx));
+        in_window(cx, window, |window, cx| window.click("link-outer", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+        in_window(cx, window, |window, cx| window.click("link-4", cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original.replace("= 8", "= 4"));
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+    }
 }

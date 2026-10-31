@@ -282,6 +282,10 @@ impl Render for GeneralView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let version = self.model.read(cx).view().general.config_version.clone();
         let current = version.value().copied().unwrap_or(1);
+        let shown_version = match &version {
+            Field::Invalid { raw, .. } => raw.clone(),
+            _ => current.to_string(),
+        };
         let rows = Setting::ALL
             .into_iter()
             .map(|setting| self.row(setting, cx))
@@ -294,7 +298,7 @@ impl Render for GeneralView {
                 h_flex()
                     .gap_4()
                     .child("config-version")
-                    .child(current.to_string())
+                    .child(shown_version)
                     .when(matches!(version, Field::Missing), |row| {
                         row.child("default: 1")
                     })

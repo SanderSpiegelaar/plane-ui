@@ -24,6 +24,7 @@ use crate::gaps_view::GapsView;
 use crate::general_view::{AutoReloadEnabled, GeneralView};
 use crate::keybindings::KeybindingsView;
 use crate::snapshots::SnapshotsView;
+use crate::workspaces_view::WorkspacesView;
 use crate::{NextSection, PreviousSection, Redo, Undo};
 
 /// The key context in which the arrow keys move between sections.
@@ -95,6 +96,7 @@ pub struct Shell {
     general: Entity<GeneralView>,
     keybindings: Entity<KeybindingsView>,
     gaps: Entity<GapsView>,
+    workspaces: Entity<WorkspacesView>,
     /// Built when the Snapshots section opens and dropped when it closes, so the list is read
     /// fresh each time and not at all otherwise.
     snapshots: Option<Entity<SnapshotsView>>,
@@ -119,6 +121,7 @@ impl Shell {
         let general = cx.new(|cx| GeneralView::new(model.clone(), window, cx));
         let keybindings = cx.new(|cx| KeybindingsView::new(model.clone(), window, cx));
         let gaps = cx.new(|cx| GapsView::new(model.clone(), window, cx));
+        let workspaces = cx.new(|cx| WorkspacesView::new(model.clone(), window, cx));
         // Undo and Redo dispatch from the focused element, so the shell holds focus until a
         // control takes it.
         let focus_handle = cx.focus_handle();
@@ -147,6 +150,7 @@ impl Shell {
             general,
             keybindings,
             gaps,
+            workspaces,
             snapshots: None,
             prefs_store,
             prefs,
@@ -335,6 +339,7 @@ impl Shell {
         let body = match (self.section, &self.snapshots) {
             (Section::Keybindings, _) => self.keybindings.clone().into_any_element(),
             (Section::Gaps, _) => self.gaps.clone().into_any_element(),
+            (Section::WorkspacesAndMonitors, _) => self.workspaces.clone().into_any_element(),
             (Section::General, _) => self.general.clone().into_any_element(),
             (Section::Snapshots, Some(snapshots)) => snapshots.clone().into_any_element(),
             _ => div()
