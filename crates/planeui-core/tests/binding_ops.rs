@@ -8,13 +8,35 @@ use std::fs;
 use std::path::Path;
 
 use planeui_core::bindings::{
-    add_mode, duplicate_binding, remove_binding, remove_mode, upsert_binding, BindingEditError,
-    RemoveModeError,
+    BindingEditError, RemoveModeError, add_mode, duplicate_binding, remove_binding, remove_mode,
+    upsert_binding,
 };
 use planeui_core::commands::{Command, ParsedScript, Script, ScriptShape};
 use planeui_core::config_doc::{ConfigDoc, KeyPath};
 use planeui_core::keys::{Chord, KeyMapping, ModeName};
 use similar::TextDiff;
+
+#[test]
+fn adding_and_removing_a_mode_preserves_each_fixture() {
+    for (fixture, appended) in [
+        ("table-style", "\n[mode.temporary.binding]\n"),
+        ("dotted-keys", "mode.temporary.binding = {}\n"),
+        ("inline-tables", "\n[mode.temporary]\nbinding = {}\n"),
+    ] {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(format!("{fixture}.toml")),
+        )
+        .unwrap();
+        let mut doc = ConfigDoc::parse(&source).unwrap();
+        let name = ModeName::new("temporary").unwrap();
+        add_mode(&mut doc, &name).unwrap();
+        assert_eq!(doc.to_string(), format!("{source}{appended}"));
+        remove_mode(&mut doc, &name).unwrap();
+        assert_eq!(doc.to_string(), source);
+    }
+}
 
 #[test]
 fn mode_additions_mirror_each_style_and_reject_duplicates() {
@@ -347,9 +369,10 @@ fn only_literal_collisions_are_rejected() {
     upsert_binding(&mut doc, "main", None, &chord("alt-shift-h"), &commands()).unwrap();
     for mode in ["main", "service"] {
         for raw in ["shift-alt-h", "alt-shift-h"] {
-            assert!(doc
-                .get(&KeyPath::from(["mode", mode, "binding", raw]))
-                .is_some());
+            assert!(
+                doc.get(&KeyPath::from(["mode", mode, "binding", raw]))
+                    .is_some()
+            );
         }
     }
     round_trip(&doc);

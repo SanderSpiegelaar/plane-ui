@@ -2,23 +2,30 @@
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::list::ListItem;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, WindowExt as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Action, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Keystroke,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div,
+    Subscription, TestSupportExt as _, Window, div,
 };
-use planeui_core::bindings::{duplicate_binding, remove_binding, upsert_binding};
+use planeui_core::bindings::{
+    RemoveModeError, add_mode, duplicate_binding, remove_binding, remove_mode, upsert_binding,
+};
 use planeui_core::commands::{Command, ParsedScript};
 use planeui_core::config_doc::{ConfigDoc, KeyPath};
 use planeui_core::config_view::{Binding, Mode};
-use planeui_core::validate::check_chord_available;
+use planeui_core::keys::ModeName;
+use planeui_core::validate::{IssueKind, check_chord_available};
 
 use crate::binding_draft::{BindingDraft, CommandDraft};
 use crate::binding_form::{BindingForm, FormEvent};
@@ -46,6 +53,8 @@ pub struct KeybindingsView {
     error: Option<SharedString>,
     form: Option<Entity<BindingForm>>,
     form_subscription: Option<Subscription>,
+    mode_input: Option<Entity<InputState>>,
+    mode_input_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,8 +104,172 @@ impl KeybindingsView {
             error: None,
             form: None,
             form_subscription: None,
+            mode_input: None,
+            mode_input_subscription: None,
             _subscriptions: vec![subscription],
         }
+    }
+
+    fn start_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Mode name"));
+        self.mode_input_subscription =
+            Some(
+                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.create_mode(window, cx);
+                    } else if matches!(event, InputEvent::Change) {
+                        this.error = None;
+                        cx.notify();
+                    }
+                }),
+            );
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.mode_input = Some(input);
+        self.error = None;
+        cx.notify();
+    }
+
+    fn create_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = &self.mode_input else {
+            return;
+        };
+        let name = match ModeName::new(input.read(cx).value().to_string()) {
+            Ok(name) => name,
+            Err(error) => {
+                self.show_error(error.to_string(), window, cx);
+                return;
+            }
+        };
+        let mut doc = self.model.read(cx).doc().clone();
+        if let Err(error) = add_mode(&mut doc, &name) {
+            self.show_error(error.to_string(), window, cx);
+            return;
+        }
+        self.commit(doc, format!("Add mode {name}"), window, cx);
+        if self.error.is_none() {
+            self.selected_mode = name.to_string();
+            self.mode_input = None;
+            self.mode_input_subscription = None;
+            self.form = None;
+            self.form_subscription = None;
+        }
+        cx.notify();
+    }
+
+    fn delete_mode(&mut self, raw_name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let name = match ModeName::new(raw_name) {
+            Ok(name) => name,
+            Err(error) => {
+                self.show_error(error.to_string(), window, cx);
+                return;
+            }
+        };
+        let mut doc = self.model.read(cx).doc().clone();
+        match remove_mode(&mut doc, &name) {
+            Ok(()) => self.commit(doc, format!("Delete mode {name}"), window, cx),
+            Err(RemoveModeError::Blocked { referencing }) => {
+                let bindings = referencing
+                    .iter()
+                    .map(|(mode, key)| format!("{mode}: {key}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.show_error(
+                    format!("Cannot delete {name}. Referenced by:\n{bindings}"),
+                    window,
+                    cx,
+                );
+            }
+            Err(error) => self.show_error(error.to_string(), window, cx),
+        }
+    }
+
+    fn render_mode_tabs(&self, selected: usize, cx: &Context<Self>) -> TabBar {
+        let names = self
+            .model
+            .read(cx)
+            .view()
+            .modes
+            .iter()
+            .map(|mode| mode.name.value.clone())
+            .collect::<Vec<_>>();
+        TabBar::new("binding-modes")
+            .selected_index(selected)
+            .children(
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| self.render_mode_tab(name, index, cx)),
+            )
+            .when(self.mode_input.is_none(), |tabs| {
+                tabs.child(Tab::new().label("+").aria_label("Add mode"))
+            })
+            .when_some(self.mode_input.clone(), |tabs, input| {
+                tabs.suffix(
+                    div()
+                        .id("new-mode")
+                        .w_40()
+                        .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                            if event.keystroke.key == "escape" {
+                                this.mode_input = None;
+                                this.mode_input_subscription = None;
+                                this.error = None;
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }))
+                        .child(Input::new(&input)),
+                )
+            })
+            .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                if let Some(name) = names.get(*index) {
+                    this.selected_mode.clone_from(name);
+                    this.form = None;
+                    this.form_subscription = None;
+                    cx.notify();
+                } else {
+                    this.start_mode(window, cx);
+                }
+            }))
+    }
+
+    fn render_mode_tab(&self, name: &str, index: usize, cx: &Context<Self>) -> Tab {
+        let warning = self.model.read(cx).report().issues.iter().find(|issue| {
+            issue.kind == IssueKind::NoWayBack
+                && issue.key_path == Some(KeyPath::from(["mode", name]))
+        });
+        let target = name.to_owned();
+        let view = cx.weak_entity();
+        let label = h_flex()
+            .id(("mode-tab", index))
+            .gap_1()
+            .child(name.to_owned())
+            .when_some(warning, |label, issue| {
+                let message = issue.message.clone();
+                label
+                    .child(Icon::new(IconName::TriangleAlert).text_color(cx.theme().warning))
+                    .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
+            })
+            .context_menu(move |menu, _, _| {
+                let view = view.clone();
+                let target = target.clone();
+                menu.item(
+                    PopupMenuItem::new("Delete mode")
+                        .disabled(target == "main")
+                        .on_click(move |_, window, cx| {
+                            if let Err(error) =
+                                view.update(cx, |this, cx| this.delete_mode(&target, window, cx))
+                            {
+                                log::debug!("keybindings closed before deleting mode: {error}");
+                            }
+                        }),
+                )
+            });
+        Tab::new()
+            .aria_label(warning.map_or_else(
+                || name.to_owned(),
+                |issue| format!("{name}: {}", issue.message),
+            ))
+            .child(label)
     }
 
     fn open_form(
@@ -183,7 +356,7 @@ impl KeybindingsView {
 
     fn show_error(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
         self.error = Some(message.clone().into());
-        window.push_notification(Notification::error(message).title("Binding not saved"), cx);
+        window.push_notification(Notification::error(message).title("Change not saved"), cx);
         cx.notify();
     }
 
@@ -442,22 +615,8 @@ impl Render for KeybindingsView {
             .iter()
             .position(|mode| mode.name.value == self.selected_mode)
             .unwrap_or_default();
-        let names = modes
-            .iter()
-            .map(|mode| mode.name.value.clone())
-            .collect::<Vec<_>>();
         let mode = modes.get(selected).cloned();
-        let tabs = TabBar::new("binding-modes")
-            .selected_index(selected)
-            .children(names.iter().map(|name| Tab::new().label(name.clone())))
-            .on_click(cx.listener(move |this, index: &usize, _, cx| {
-                if let Some(name) = names.get(*index) {
-                    this.selected_mode.clone_from(name);
-                    this.form = None;
-                    this.form_subscription = None;
-                    cx.notify();
-                }
-            }));
+        let tabs = self.render_mode_tabs(selected, cx);
         let original = self
             .form
             .as_ref()
@@ -492,7 +651,13 @@ impl Render for KeybindingsView {
                 )
             })
             .when_some(self.error.clone(), |view, error| {
-                view.child(Alert::error("binding-error", error))
+                view.child(
+                    div()
+                        .id("binding-error")
+                        .aria_label(error.clone())
+                        .test_support()
+                        .child(Alert::error("binding-alert", error)),
+                )
             })
             .child(
                 v_flex()
@@ -555,6 +720,137 @@ mod tests {
             raw_key: raw_key.to_owned(),
             target: target.to_owned(),
         }
+    }
+
+    #[gpui_kit::test]
+    fn enter_creates_and_selects_a_mode_and_escape_cancels(cx: &mut TestAppContext) {
+        let fixture = Fixture::new("[mode.main.binding]\n");
+        let (window, view, model) = open_view(cx, &fixture);
+        in_window(cx, window, |window, cx| {
+            window.within("binding-modes").click(1usize, cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.input("service", cx);
+            window.press("enter", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            "[mode.main.binding]\n\n[mode.service.binding]\n"
+        );
+        assert_eq!(
+            view.read_with(cx, |view, _| view.selected_mode.clone()),
+            "service"
+        );
+        assert!(view.read_with(cx, |view, _| view.mode_input.is_none()));
+        assert_eq!(fixture.aerospace.reload_count(), 1);
+        assert!(model.read_with(cx, |model, _| {
+            model
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.kind == IssueKind::NoWayBack)
+        }));
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.within("binding-modes").find(1usize).label(),
+                Some("service: mode service has no binding back to main")
+            );
+        });
+        let before = fixture.disk();
+        in_window(cx, window, |window, cx| {
+            view.update(cx, |view, cx| view.start_mode(window, cx));
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.input("cancelled", cx);
+            window.press("escape", cx);
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.mode_input.is_none()));
+        assert_eq!(fixture.disk(), before);
+    }
+
+    #[gpui_kit::test]
+    fn invalid_and_duplicate_mode_names_do_not_write(cx: &mut TestAppContext) {
+        let original = "[mode.main.binding]\n";
+        let fixture = Fixture::new(original);
+        let (window, view, _) = open_view(cx, &fixture);
+        for (name, expected) in [
+            ("", "the mode name is empty"),
+            ("main", "mode.main already exists"),
+        ] {
+            in_window(cx, window, |window, cx| {
+                view.update(cx, |view, cx| view.start_mode(window, cx));
+            });
+            cx.run_until_parked();
+            in_window(cx, window, |window, cx| {
+                if !name.is_empty() {
+                    window.input(name, cx);
+                }
+                window.press("enter", cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                view.read_with(cx, |view, _| view.error.clone()).as_deref(),
+                Some(expected)
+            );
+            assert_eq!(fixture.disk(), original);
+            assert_eq!(fixture.aerospace.reload_count(), 0);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn blocked_mode_deletion_shows_every_reference_and_never_writes(cx: &mut TestAppContext) {
+        let original = "[mode.main.binding]\nalt-s='mode service'\nesc=['close', 'mode service']\n[mode.service.binding]\nesc='mode main'\n";
+        let fixture = Fixture::new(original);
+        let (window, view, _) = open_view(cx, &fixture);
+        in_window(cx, window, |window, cx| {
+            window.within("binding-modes").right_click(1usize, cx);
+        });
+        cx.run_until_parked();
+        in_window(cx, window, |window, cx| {
+            window.within("popup-menu").click(0usize, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), original);
+        assert_eq!(fixture.aerospace.reload_count(), 0);
+        assert_eq!(fixture.snapshots(), Vec::<String>::new());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.error.clone()).as_deref(),
+            Some("Cannot delete service. Referenced by:\nmain: alt-s\nmain: esc")
+        );
+        in_window(cx, window, |window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("binding-error").label(),
+                Some("Cannot delete service. Referenced by:\nmain: alt-s\nmain: esc")
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn unreferenced_mode_deletion_is_undoable(cx: &mut TestAppContext) {
+        let fixture = Fixture::new(CONFIG);
+        let (window, view, model) = open_view(cx, &fixture);
+        view.update(cx, |view, _| view.selected_mode = "free".into());
+        in_window(cx, window, |window, cx| {
+            view.update(cx, |view, cx| view.delete_mode("free", window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            fixture.disk(),
+            CONFIG.replace("\n[mode.free.binding]\n", "")
+        );
+        assert_eq!(
+            view.read_with(cx, |view, _| view.selected_mode.clone()),
+            "main"
+        );
+        model.update(cx, ConfigModel::undo);
+        cx.run_until_parked();
+        assert_eq!(fixture.disk(), CONFIG);
     }
 
     #[gpui_kit::test]
